@@ -228,7 +228,7 @@ def test_heartbeat_contract_and_stopped_on_exit():
     assert bus._publish_heartbeat()
     topic, body, retain = bus._client.pub[-1]
     assert topic == HEARTBEAT_TOPIC == "isrkit/heartbeat/fpv-vision" and retain
-    assert set(body) == {"tool", "host", "url", "mode", "status", "ts"} and body["ts"] > 0
+    assert {"tool", "host", "url", "mode", "status", "ts"} <= set(body) and body["ts"] > 0
     bus.stop()
     assert bus._client.pub[-1][1]["status"] == "stopped" and bus._client.pub[-1][2]
 
@@ -271,6 +271,7 @@ def test_service_heartbeat_modes(settings):
     hb = svc.heartbeat()
     assert hb["tool"] == "fpv-vision" and hb["host"] == "isr-droneops"
     assert hb["url"] == "http://isr-droneops.local:8110/" and hb["mode"] == "simulate"
+    assert hb["detail"].endswith("local summary") and isinstance(hb["detail"], str)
     p.source = sources.VideoSource("replay:/x.mp4")
     assert svc.mode() == "replay"
     p.source = sources.VideoSource("camera:iPhone")

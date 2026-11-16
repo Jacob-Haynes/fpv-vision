@@ -259,10 +259,11 @@ class SyntheticGenerator:
 class VideoSource:
     """Threaded capture holding only the latest frame (plus its capture timestamp)."""
 
-    def __init__(self, spec: str, *, width: int = 1280, height: int = 720, sample_path: Path | None = None,
-                 loop_seconds: float = 0.0):
+    def __init__(self, spec: str, *, width: int = 1920, height: int = 1080, sample_path: Path | None = None,
+                 loop_seconds: float = 0.0, fps: int = 60):
         self.spec = parse_spec(spec)
-        self.width, self.height = width, height
+        self.width, self.height, self.req_fps = width, height, fps
+        self.negotiated = ""  # what the camera/capture card actually agreed to, e.g. "1920x1080@60 MJPG"
         self.sample_path = sample_path
         self.loop_seconds = loop_seconds  # replay: rewind after this many seconds (0 = whole file)
         self._lock = threading.Lock()
@@ -341,6 +342,7 @@ class VideoSource:
             "fps_in": round(self.fps_in, 1),
             "frames": fid,
             "crop": self.crop,
+            "negotiated": self.negotiated,
         }
         if self.is_replay:
             st["replay_state"] = {**self.replay, "files": [Path(p).name for p in self.playlist],
@@ -527,10 +529,14 @@ class VideoSource:
                 dev = int(target) if target.isdigit() else target
             cap = cv2.VideoCapture(dev, camera_backend())
             if sys.platform != "darwin":
-                # Most cheap HDMI/AV dongles only reach 30fps at 720p+ with MJPEG.
+                # UVC capture cards (e.g. MS2109/MS2130 HDMI->USB) only reach 1080p30/60 as MJPEG;
+                # raw YUY2 at 1080p needs more USB bandwidth and more CPU. On macOS AVFoundation
+                # picks the device format itself (and decodes MJPEG in hardware), so we don't force it.
                 cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            if self.req_fps:
+                cap.set(cv2.CAP_PROP_FPS, self.req_fps)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self.resolved = f"{target} -> device {dev}" if kind == "camera" else str(dev)
             return cap
@@ -575,7 +581,8 @@ class VideoSource:
                 continue
             self.connected, self.error = True, ""
             backoff = 1.0
-            log.info("source %s opened (%s)", self.spec.raw, self.resolved)
+            self.negotiated = self._describe_mode(cap)
+            log.info("source %s opened (%s) %s", self.spec.raw, self.resolved, self.negotiated)
             n, t_window, fails = 0, time.time(), 0
             while not self._stop.is_set():
                 ok, frame = cap.read()
@@ -600,6 +607,15 @@ class VideoSource:
                 if self._wait_or_stop(backoff):
                     return
                 backoff = min(backoff * 2, 15)
+
+    @staticmethod
+    def _describe_mode(cap: cv2.VideoCapture) -> str:
+        w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 0
+        code = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
+        fourcc = "".join(chr((code >> 8 * i) & 0xFF) for i in range(4)).strip("\x00 ") if code else ""
+        fourcc = fourcc if fourcc.isprintable() else ""
+        return f"{w}x{h}" + (f"@{fps:.0f}" if fps else "") + (f" {fourcc}" if fourcc else "")
 
     def _run_synthetic(self) -> None:
         gen = SyntheticGenerator()

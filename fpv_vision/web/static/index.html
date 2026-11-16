@@ -239,7 +239,7 @@ function renderStatus(s) {
   lastStatus = s;
   const src = s.source, d = s.detector, v = s.vlm;
   const kindLabel = { replay:"REPLAY", simulate:"SIMULATED", screen:"SCREEN MIRROR" }[src.kind] || "LIVE";
-  pill($("srcPill"), `${kindLabel} · ${src.connected ? `${src.width}×${src.height} @ ${src.fps_in}fps` : (src.error || "connecting…")}`,
+  pill($("srcPill"), `${kindLabel} · ${src.connected ? `${src.width}×${src.height} @ ${src.fps_in}fps${src.negotiated ? ` (${src.negotiated})` : ""}` : (src.error || "connecting…")}`,
        src.connected ? (src.kind === "replay" || src.kind === "simulate" ? "warn" : "ok") : "bad");
   pill($("detPill"), d.name === "none" ? `no detector: ${d.reason || ""}` : `${(d.model||"").split("/").pop()} · ${d.backend}/${d.device} · ByteTrack`, d.name === "none" ? "bad" : "ok");
   const active = v.active;
@@ -255,7 +255,8 @@ function renderStatus(s) {
   $("sSkip").textContent = s.stats.frames_per_detection || "–";
   $("latInfo").textContent = `latency = frame decoded/captured → annotated JPEG (${Math.round(s.stats.pipeline_ms)} ms) + box age (${Math.round(s.stats.box_lag_ms)} ms); excludes capture device, network and browser.` +
     (s.stats.detect_gap_ms ? ` Detector backing off ${s.stats.detect_gap_ms} ms.` : "");
-  $("srcInfo").textContent = `Current: ${src.spec} → ${src.resolved || "?"}` + (src.crop ? ` · cropped` : "") + (src.error ? ` · ${src.error}` : "") +
+  $("srcInfo").textContent = `Current: ${src.spec} → ${src.resolved || "?"}` +
+    (src.negotiated ? ` · device mode ${src.negotiated}, receiving ${src.fps_in} fps` : "") + (src.crop ? ` · cropped` : "") + (src.error ? ` · ${src.error}` : "") +
     (["denied", "not_determined", "restricted"].includes(s.camera_permission) ? ` · macOS camera access: ${s.camera_permission} (System Settings › Privacy & Security › Camera)` : "");
 
   // replay bar

@@ -163,10 +163,45 @@ video hacks) is deliberately not used.
 3. **RTMP from DJI Fly** (Transmission → Live Streaming Platforms → RTMP) to an RTMP server on
    the Mac (e.g. `mediamtx`), then use source `rtmp://localhost/live/drone`. This adds several
    seconds of latency and is **not confirmed for the N3**. Test it before relying on it.
-4. **Live real-time boxes without the drone:** the Mac's camera or an **iPhone through Continuity
-   Camera**. These appear by name in the source list ("Camera: iPhone…"), so no index guessing.
-   A GoPro Hero 4/5 (micro-HDMI) into a USB capture card also appears as a camera, if one turns
-   up.
+4. **Live real-time boxes without the drone:** the **GoPro HERO4 → HDMI capture card** (below),
+   the Mac's camera, or an **iPhone through Continuity Camera**. These appear by name in the
+   source list ("Camera: iPhone…", "Camera: <capture card name>"), so no index guessing.
+
+### GoPro HERO4 → Guermok HDMI capture card → Mac (live)
+
+```
+ GoPro HERO4 ──micro-HDMI (Type D) → HDMI cable──> Guermok HDMI→USB-C capture card (UVC, USB 3.0)
+             ──USB-C, straight into a Mac USB-C/Thunderbolt port (NOT a hub)──> Drone-ops Mac
+```
+
+- **Cable:** the HERO4's HDMI port is **micro-HDMI**. You need a **micro-HDMI (Type D) to
+  full-size HDMI** cable. GoPro doesn't include one ("micro HDMI, composite or combo cable, sold
+  separately" in the [HERO4 Black manual](https://gopro.com/content/dam/help/hero4-black/music-bundle-manuals/UM_H4Black-Music_ENG_REVB_WEB.pdf)).
+  Some cases cover the port, so use the frame or an open side door. The HERO4 has **no USB
+  webcam mode**. The GoPro Wi-Fi preview is deliberately not supported, because joining the
+  camera's Wi-Fi would take the Mac off the Pi hotspot.
+- **Camera settings:**
+  - **Setup → On-Screen Display → Off.** The manual describes OSD as the recording icons and
+    file info "on the viewing screen during playback". Users report it also governs the
+    overlays on the live HDMI feed. Check before the demo, because overlay text causes false
+    detections; the **✂ Crop** tool is the fallback.
+  - **Setup → Video Format → PAL** in the UK (25/50 fps; NTSC is 30/60). The manual says this
+    governs the TV/HDMI frame rates.
+  - Put the camera in **Video mode, not recording**. Keep it on external power: the battery
+    drains fast with HDMI out and the screen on.
+- **What resolution arrives:** GoPro doesn't publish the HERO4's live-preview HDMI resolution.
+  The manual only says HDMI is certified up to 1080p. One forum user saw 720×480 from a HERO4 on
+  their capture setup, and others report 1080p. **The UI shows what the card actually
+  negotiated** (source pill and "device mode …, receiving N fps"). If it reads 720×480, set the
+  camera to a 1080p video mode, unplug and replug the HDMI cable, and check again.
+- **Capture defaults:** fpv-vision asks cameras and capture cards for **1920×1080 at 60 fps**
+  (`FPV_CAPTURE_WIDTH/HEIGHT/FPS`). On Linux and Windows it requests **MJPEG**, which needs
+  less USB bandwidth and CPU than raw YUY2. On macOS, AVFoundation picks the device format
+  itself (and decodes MJPEG in hardware), so the format isn't forced there. Plug the card
+  **directly into a Mac USB-C port**, not a hub or dock, so it gets USB 3 bandwidth for
+  1080p60.
+- **Recorded HERO4 MP4s** (H.264, no GPS) work in **replay as live** and **post-flight
+  analysis** like any other MP4. Copy them from `DCIM/100GOPRO/` into `~/Movies/FPV`.
 
 ## Post-flight analysis
 
@@ -286,11 +321,12 @@ and Time is a DTG. It then sends:
 Every 10 s, fpv-vision publishes this retained message to `isrkit/heartbeat/fpv-vision`:
 
 ```json
-{"tool":"fpv-vision","host":"isr-droneops","url":"http://isr-droneops.local:8110/","mode":"replay","status":"ok","ts":1794836403}
+{"tool":"fpv-vision","host":"isr-droneops","url":"http://isr-droneops.local:8110/","mode":"replay","status":"ok","ts":1794836403,"detail":"yolo26s mps 2160p 58fps, VLM qwen3-vl:8b @ isr-hq"}
 ```
 
 - `mode` is `replay` | `simulate` | `mps` | `cuda` | `cpu`, which is the video source type, or
   the accelerator when the input is live.
+- `detail` is optional and human-readable, e.g. `"yolo26s mps 1080p 58fps, VLM qwen3-vl:8b @ isr-hq"`.
 - `status` is `ok`, `degraded` (no detector, or the source is reconnecting) or `error`.
 - On a clean exit it publishes `stopped`. The MQTT last-will publishes `error` if the process dies.
 - On macOS the host comes from `scutil --get LocalHostName`. Override it with `FPV_PUBLIC_HOST`
@@ -329,8 +365,8 @@ the big screen or on a tablet at `http://isr-droneops.local:8110`.
 5. **Post-flight (2 min).** Pretend we just landed: point **Analyse** at the SD card folder.
    About 2 minutes later you have a timeline and best frames. Click a peak to jump the replay
    there, and spot-report a best frame.
-6. **Live (1 min, optional).** Switch the source to **Camera: iPhone** (Continuity Camera) and
-   walk through the room for live boxes. If time allows, show the N3 → phone → screen-mirror
+6. **Live (1 min).** Switch the source to the **capture card** (GoPro HERO4 on HDMI) or **Camera:
+   iPhone** (Continuity Camera), and walk through the room for live boxes. If time allows, show the N3 → phone → screen-mirror
    path and be clear that it is best-effort.
 7. **Discuss.** Why the marker is at the *entered* grid. What the cloud fallback would send off
    the device. What it would take to geolocate detections.
@@ -370,7 +406,7 @@ Pi sources:
 
 | spec | source |
 |---|---|
-| `uvc:/dev/video0` | USB capture card (analog FPV receiver AV-out, an HDMI source, GoPro Hero 4/5 micro-HDMI) |
+| `uvc:/dev/video0` | USB capture card (analog FPV receiver AV-out, an HDMI source such as the GoPro HERO4's micro-HDMI) |
 | `rtsp://…` / `rtmp://…` | network streams |
 | `replay:/path` | footage files |
 
@@ -378,7 +414,7 @@ Pi sources:
 
 ```
  analog FPV goggles/receiver ──AV out──> AV→USB dongle (UVC) ──USB──> Pi 5 / Mac
- HDMI source (GoPro Hero 4/5, RC Pro) ──HDMI──> HDMI→USB capture card (MS2109/MS2130) ──USB──> Pi 5 / Mac
+ HDMI source (GoPro HERO4, DJI RC Pro) ──HDMI──> HDMI→USB capture card (UVC, MJPEG) ──USB 3──> Pi 5 / Mac
 ```
 
 ## Detection, tracking and counting
@@ -411,6 +447,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 
 | variable | default | meaning |
 |---|---|---|
+| `FPV_CAPTURE_WIDTH` / `FPV_CAPTURE_HEIGHT` / `FPV_CAPTURE_FPS` | 1920 / 1080 / 60 | requested camera/capture mode (Pi env: 1280×720@30) |
 | `FPV_SOURCE` | `simulate` | `replay:…`, `camera:<name>`, `uvc:N`, `screen:N`, `rtsp://…`, `simulate[:aerial]`, `auto` |
 | `FPV_FOOTAGE_DIRS` | `~/Movies/FPV` | folders shown in the footage picker (`:`-separated) |
 | `FPV_DEVICE` | `auto` | CUDA > MPS > CPU |

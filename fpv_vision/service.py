@@ -41,7 +41,7 @@ def make_source(spec: str, settings) -> sources.VideoSource:
         sample_path = sample.ensure_sample(settings.data_dir, parsed.target or None, url=settings.sample_url)
         loop = float(info.get("loop_seconds") or 0)
     return sources.VideoSource(spec, width=settings.capture_width, height=settings.capture_height,
-                               sample_path=sample_path, loop_seconds=loop)
+                               sample_path=sample_path, loop_seconds=loop, fps=settings.capture_fps)
 
 
 @functools.lru_cache(maxsize=1)
@@ -305,9 +305,36 @@ class Service:
         host = self.settings.public_host or short_hostname()
         return f"http://{host}.local:{self.settings.port}/"
 
+    def detail(self) -> str:
+        """Human summary for the launcher, e.g. 'yolo26s mps 1080p 42fps, VLM qwen3-vl:8b @ isr-hq'."""
+        p = self.pipeline
+        info = p.detector.info()
+        st = p.source.status()
+        parts = []
+        if info.get("name") == "none":
+            parts.append("no detector")
+        else:
+            model = Path(str(info.get("model", ""))).name.replace("_ncnn_model", "").replace(".pt", "")
+            parts.append(f"{model} {info.get('accelerator', 'cpu')}")
+        if st.get("height"):
+            parts.append(f"{st['height']}p")
+        if p.stats.detect_fps:
+            parts.append(f"{p.stats.detect_fps:.0f}fps")
+        head = " ".join(parts)
+        vlm = self.describer.status()
+        if vlm["active"] == "openai_compat" and self.describer.openai:
+            from urllib.parse import urlparse
+
+            host = (urlparse(self.describer.openai.base).hostname or "").removesuffix(".local")
+            return f"{head}, VLM {vlm['model']} @ {host}"
+        if vlm["active"] == "gemini":
+            return f"{head}, Gemini {vlm['model']}"
+        return f"{head}, local summary"
+
     def heartbeat(self) -> dict:
         return {"tool": "fpv-vision", "host": self.settings.public_host or short_hostname(),
-                "url": self.public_url(), "mode": self.mode(), "status": self.health(), "ts": int(time.time())}
+                "url": self.public_url(), "mode": self.mode(), "status": self.health(), "ts": int(time.time()),
+                "detail": self.detail()}
 
     def status(self) -> dict:
         p = self.pipeline

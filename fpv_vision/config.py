@@ -50,8 +50,9 @@ def _default_data_dir() -> Path:
 class Settings:
     # --- video ---
     source: str = "simulate"  # simulate | uvc:0 | uvc:/dev/video0 | rtsp://... | file:/path.mp4 | gopro-usb
-    capture_width: int = 1280
-    capture_height: int = 720
+    capture_width: int = 1920  # requested from cameras/capture cards; the device may negotiate lower
+    capture_height: int = 1080
+    capture_fps: int = 60
     sample_url: str = ""
 
     # --- detection ---
@@ -137,6 +138,7 @@ class Settings:
         s.source = _env("FPV_SOURCE", s.source)
         s.capture_width = _env_int("FPV_CAPTURE_WIDTH", s.capture_width)
         s.capture_height = _env_int("FPV_CAPTURE_HEIGHT", s.capture_height)
+        s.capture_fps = _env_int("FPV_CAPTURE_FPS", s.capture_fps)
         s.sample_url = _env("FPV_SAMPLE_URL", s.sample_url)
         s.model = _env("FPV_MODEL", s.model)
         s.gpu_model = _env("FPV_GPU_MODEL", s.gpu_model)
