@@ -172,9 +172,11 @@ class Service:
         out = {"ok": True, "report": rep, "snapshot": snap["name"], "cot": None, "mesh": None}
         if send_cot:
             xml = cot.spot_report_cot(lat=rep["lat"], lon=rep["lon"], callsign=rep["callsign"],
-                                      remarks=rep["remarks"], sender=self.settings.callsign)
+                                      remarks=rep["remarks"], sender=self.settings.callsign,
+                                      sender_uid=getattr(self.tak, "uid", None))
             queued = self.tak.send(xml)
             out["cot"] = {"queued": queued, "connected": self.tak.connected,
+                          "registered": getattr(self.tak, "registered", False),
                           "error": None if queued else self.tak.last_error}
         if send_mesh:
             sent = self.mesh.send(rep["mesh_text"])

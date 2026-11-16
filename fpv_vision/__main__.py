@@ -175,7 +175,8 @@ def main(argv=None) -> int:
 
     import uvicorn
 
-    from fpv_vision.cot import CotSender
+    from fpv_vision import __version__
+    from fpv_vision.tak_client import TakClient
     from fpv_vision.detector import build_detector
     from fpv_vision.gemini import GeminiDescriber
     from fpv_vision.mesh import MeshBus
@@ -203,7 +204,12 @@ def main(argv=None) -> int:
     local_vlm = OpenAICompatDescriber(settings.vlm_url, settings.vlm_model, settings.vlm_api_key,
                                       settings.vlm_min_interval) if settings.vlm_url else None
     describer = SceneDescriber(settings.vlm_backend, local_vlm, gemini)
-    tak = CotSender(settings.tak_host, settings.tak_port, settings.tak_enabled).start()
+    from fpv_vision.service import short_hostname
+
+    # Contract C5: one long-lived, registered TAK connection, opened at startup
+    tak = TakClient(settings.tak_host, settings.tak_port, settings.tak_enabled, tool="fpv-vision", label="FPV",
+                    station=short_hostname(), lat=settings.sensor_lat, lon=settings.sensor_lon,
+                    version=__version__).start()
     mesh = MeshBus(settings.mqtt_host, settings.mqtt_port, settings.mqtt_user, settings.mqtt_pass,
                    enabled=settings.mqtt_enabled, mesh_enabled=settings.mesh_enabled)
     service = Service(settings, pipeline, describer, tak, mesh, detector_factory=lambda: build_detector(settings))

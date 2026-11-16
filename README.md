@@ -335,10 +335,29 @@ falls back to `FPV_DEFAULT_POSITION`, then to the shared `SENSOR_LAT`/`SENSOR_LO
 those set the report is refused: **we never emit 0,0**. Time is a DTG. It then sends:
 
 1. **CoT** to `TAK_HOST:TAK_PORT`: an `a-u-G` marker with `how="h-e"` (human-entered) and the full
-   report in its remarks. Messages are queued and retried with backoff if TAK is down.
+   report in its remarks. It goes over fpv-vision's one long-lived, registered TAK connection
+   (see below). Reports are queued until registration completes, and while TAK is down.
 2. A **mesh text** of 200 characters or less on MQTT `meshbus/tx`, as `{"text","to":null,"channel":0,"source":"fpv-vision"}`.
    The blufor-tracker bridge owns the radio, and we never open its serial port. Replies on
    `meshbus/rx` show in the **Mesh inbox**.
+
+**TAK connection (contract C5).** OpenTAKServer 1.8.3 drops CoT from anything that isn't
+a registered EUD. It only binds a client whose first `<contact>` arrives after its channel
+opens (about 3 s after connect), and it silently refuses a uid whose callsign is already
+taken. So `fpv_vision/tak_client.py` does the following:
+- opens **one** TCP connection at startup and reconnects with backoff;
+- **3 s after every (re)connect**, sends a registration SA, then re-sends it every 60 s.
+  The SA's uid is `isrkit-fpv-vision-<ISR_HOST>`, its callsign `FPV <ISR_HOST>` (stable,
+  never random), type `a-f-G-E-S`, with `endpoint="*:-1:stcp"`, group Cyan / Team Member,
+  and `takv platform="isr-kit"`. Its position is `SENSOR_LAT`/`SENSOR_LON` with stale
+  now+120 s. With no position set it uses `0,0` with unknown hae/ce/le and stale = start,
+  so ATAK never draws it. This is the only 0,0 the kit emits;
+- sends spot reports on that same connection, and only after registration;
+- reads and discards what OTS sends back, so the server never blocks on us.
+
+The header pill reads "TAK registered as FPV <host>" once the SA has gone out. The tests in
+`tests/test_tak_client.py` run against a fake OTS (`tests/fake_ots.py`) that enforces all
+three rules.
 
 **Provenance labels (contract C4.3).** Reports made from the sample clips start with
 `SIMULATED: ` in the CoT remarks and `[SIM] ` in the mesh text. Reports from replayed or

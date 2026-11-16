@@ -1,6 +1,4 @@
 import json
-import socket
-import threading
 import xml.etree.ElementTree as ET
 
 from fpv_vision import cot
@@ -18,39 +16,6 @@ def test_spot_report_cot_is_valid_xml():
     assert root.find("detail/remarks").text == "2 pax & 1 veh"
     assert root.find("detail/contact").get("callsign") == "SPOT <1>"
     assert root.get("time").startswith("2026-11-16T12:30:00")
-
-
-def test_cot_sender_tolerates_down_server_then_delivers():
-    # grab a free port, keep it closed for now
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-
-    sender = cot.CotSender("127.0.0.1", port).start()
-    assert sender.send("<event/>")
-    assert wait_for(lambda: sender.last_error != "", timeout=5)
-    assert not sender.connected
-
-    received = []
-    srv = socket.socket()
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", port))
-    srv.listen(1)
-
-    def accept():
-        c, _ = srv.accept()
-        received.append(c.recv(1024))
-        c.close()
-
-    t = threading.Thread(target=accept, daemon=True)
-    t.start()
-    try:
-        assert wait_for(lambda: received, timeout=10)  # backoff retry reaches the server
-        assert received[0] == b"<event/>"
-    finally:
-        sender.stop()
-        srv.close()
 
 
 def test_cot_disabled_never_queues():

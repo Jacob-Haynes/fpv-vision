@@ -246,7 +246,7 @@ function renderStatus(s) {
   pill($("scenePill"), active === "openai_compat" ? `scene: VLM ${v.model}` : active === "gemini" ? `scene: Gemini ${v.model} (cloud)` :
        (v.selected !== "off" ? `scene: local only (${v.selected} unreachable)` : "scene: local only (offline)"),
        active === "openai_compat" ? "vlm" : active === "gemini" ? "cloud" : (v.selected !== "off" ? "warn" : "ok"));
-  pill($("takPill"), `TAK ${s.tak.enabled ? (s.tak.connected ? "connected" : "offline") : "disabled"}${s.tak.queued ? ` (${s.tak.queued} queued)` : ""}`, s.tak.connected ? "ok" : (s.tak.enabled ? "warn" : ""));
+  pill($("takPill"), `TAK ${s.tak.enabled ? (s.tak.registered ? `registered as ${s.tak.callsign}` : s.tak.connected ? "connected, registering…" : "offline") : "disabled"}${s.tak.queued ? ` (${s.tak.queued} queued)` : ""}`, s.tak.registered ? "ok" : (s.tak.enabled ? "warn" : ""));
   pill($("meshPill"), `MQTT ${s.mesh.connected ? `connected · heartbeat ${s.mesh.heartbeats}` : "offline"}`, s.mesh.connected ? "ok" : "warn");
   $("sVideo").textContent = s.stats.render_fps || "–";
   $("sDet").textContent = s.stats.detect_fps || "–";
@@ -460,7 +460,7 @@ $("btnSpot").onclick = async () => {
     const r = await api("/api/spot-report", { position: $("pos").value, activity: $("activity").value, unit: $("unit").value,
       snapshot: selectedSnap, send_cot: $("sendCot").checked, send_mesh: $("sendMesh").checked });
     const parts = [`Grid ${r.report.grid} · ${r.report.dtg}`];
-    if (r.cot) parts.push(`CoT: ${r.cot.queued ? (r.cot.connected ? "sent to TAK" : "queued (TAK offline, will retry)") : "not sent"}`);
+    if (r.cot) parts.push(`CoT: ${r.cot.queued ? (r.cot.registered ? "sent to TAK" : "queued until TAK registration completes") : `not sent (${r.cot.error || "TAK disabled"})`}`);
     if (r.mesh) parts.push(`Mesh: ${r.mesh.sent ? "published" : `NOT sent (${r.mesh.error || "broker offline"})`}\n“${r.mesh.text}”`);
     msg($("spotMsg"), parts.join("\n"), true); refreshGallery();
   } catch (e) { msg($("spotMsg"), e.message, false); }
