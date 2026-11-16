@@ -10,11 +10,11 @@ from conftest import wait_for
 
 
 def test_spot_report_cot_is_valid_xml():
-    xml = cot.spot_report_cot(lat=51.15, lon=-1.75, callsign="SPOT <1>", remarks="2 pax & 1 veh", now=1794832200)
+    xml = cot.spot_report_cot(lat=42.0, lon=-93.0, callsign="SPOT <1>", remarks="2 pax & 1 veh", now=1794832200)
     root = ET.fromstring(xml.encode())
     assert root.tag == "event" and root.get("type") == "a-u-G" and root.get("how") == "h-e"
     pt = root.find("point")
-    assert float(pt.get("lat")) == 51.15 and float(pt.get("lon")) == -1.75
+    assert float(pt.get("lat")) == 42.0 and float(pt.get("lon")) == -93.0
     assert root.find("detail/remarks").text == "2 pax & 1 veh"
     assert root.find("detail/contact").get("callsign") == "SPOT <1>"
     assert root.get("time").startswith("2026-11-16T12:30:00")

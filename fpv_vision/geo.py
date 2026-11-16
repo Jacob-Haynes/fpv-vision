@@ -154,7 +154,7 @@ _LATLON_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$")
 
 
 def parse_position(text: str) -> tuple[float, float]:
-    """Accept '51.15, -1.75' or an MGRS grid like '30U WB 12345 67890'."""
+    """Accept '42.0, -93.0' or an MGRS grid like '30U WB 12345 67890'."""
     if not text or not text.strip():
         raise PositionError("no position given")
     m = _LATLON_RE.match(text)

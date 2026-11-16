@@ -163,10 +163,10 @@ def test_describe_local_and_gallery(app_client):
 
 def test_spot_report_api(app_client):
     client, service = app_client
-    r = client.post("/api/spot-report", json={"position": "30U WB 87427 67248", "activity": "static"})
+    r = client.post("/api/spot-report", json={"position": "15T WG 00000 49776", "activity": "static"})
     assert r.status_code == 200, r.text
     rep = r.json()
-    assert rep["report"]["grid"] == "30U WB 87427 67248"
+    assert rep["report"]["grid"] == "15T WG 00000 49776"
     assert rep["report"]["size"] == "2 pax, 2 veh"
     assert rep["cot"]["queued"] is False and rep["cot"]["connected"] is False  # TAK disabled in tests
     assert rep["report"]["provenance"] == "simulated"  # synthetic source
@@ -176,7 +176,7 @@ def test_spot_report_api(app_client):
     assert len(rep["mesh"]["text"]) < 200
     # using an existing snapshot
     name = client.post("/api/snapshot").json()["name"]
-    r = client.post("/api/spot-report", json={"position": "51.15,-1.75", "snapshot": name})
+    r = client.post("/api/spot-report", json={"position": "42.0,-93.0", "snapshot": name})
     assert r.status_code == 200 and r.json()["snapshot"] == name
     assert client.post("/api/spot-report", json={"position": "nowhere"}).status_code == 400
 

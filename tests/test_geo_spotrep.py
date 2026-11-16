@@ -12,7 +12,7 @@ def test_mgrs_known_vector():
     assert lat == pytest.approx(42.0, abs=1e-4) and lon == pytest.approx(-93.0, abs=1e-4)
 
 
-@pytest.mark.parametrize("lat,lon", [(51.15, -1.75), (-33.86, 151.21), (0.1, 0.1), (-0.1, -60.0),
+@pytest.mark.parametrize("lat,lon", [(42.0, -93.0), (-33.86, 151.21), (0.1, 0.1), (-0.1, -60.0),
                                      (60.0, 5.0), (78.0, 15.0), (-79.0, 170.0), (64.1, -21.9)])
 def test_mgrs_round_trip(lat, lon):
     g = geo.to_mgrs(lat, lon)
@@ -25,13 +25,13 @@ def test_mgrs_round_trip(lat, lon):
 
 
 def test_parse_position_formats():
-    assert geo.parse_position("51.15, -1.75") == (51.15, -1.75)
-    assert geo.parse_position("51.15 -1.75") == (51.15, -1.75)
-    lat, lon = geo.parse_position("30U WB 87427 67248")
-    assert lat == pytest.approx(51.15, abs=1e-4) and lon == pytest.approx(-1.75, abs=1e-4)
+    assert geo.parse_position("42.0, -93.0") == (42.0, -93.0)
+    assert geo.parse_position("42.0 -93.0") == (42.0, -93.0)
+    lat, lon = geo.parse_position("15T WG 00000 49776")
+    assert lat == pytest.approx(42.0, abs=1e-4) and lon == pytest.approx(-93.0, abs=1e-4)
     # 6-figure grid -> centre of the 100 m square
-    lat6, lon6 = geo.parse_position("30UWB874672")
-    assert lat6 == pytest.approx(51.15, abs=2e-3) and lon6 == pytest.approx(-1.75, abs=2e-3)
+    lat6, lon6 = geo.parse_position("15TWG000497")
+    assert lat6 == pytest.approx(42.0, abs=2e-3) and lon6 == pytest.approx(-93.0, abs=2e-3)
     for bad in ("", "hello", "95, 10", "30UWB123"):
         with pytest.raises(ValueError):
             geo.parse_position(bad)
@@ -44,11 +44,11 @@ def test_dtg_format():
 
 def test_spot_report_text_limits():
     dets = [Detection(0, "person", 0.9, (0, 0, 10, 20), 1), Detection(2, "car", 0.9, (0, 0, 40, 20), 2)]
-    rep = spotrep.build(dets=dets, position="51.15,-1.75", activity="x" * 500, summary_text="s",
+    rep = spotrep.build(dets=dets, position="42.0,-93.0", activity="x" * 500, summary_text="s",
                         callsign="FPV-VISION")
     assert rep["size"] == "1 pax, 1 veh"
     assert rep["equipment"] == "1x car"
-    assert rep["grid"].startswith("30U WB")
+    assert rep["grid"].startswith("15T WG")
     assert len(rep["mesh_text"]) < 200
     assert rep["mesh_text"].isascii()
     assert "operator-reported location" in rep["remarks"]

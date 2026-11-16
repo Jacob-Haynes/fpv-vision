@@ -311,8 +311,8 @@ def test_heartbeat_host_defaults_to_gethostname(monkeypatch):
     from fpv_vision.service import short_hostname
 
     monkeypatch.delenv("ISR_HOST", raising=False)
-    monkeypatch.setattr(socket, "gethostname", lambda: "Field-Laptop.lan")
-    assert short_hostname() == "field-laptop"
+    monkeypatch.setattr(socket, "gethostname", lambda: "Example-Host.lan")
+    assert short_hostname() == "example-host"
     monkeypatch.setenv("ISR_HOST", "isr-droneops")
     assert short_hostname() == "isr-droneops"
 
@@ -323,7 +323,7 @@ def test_provenance_prefixes_on_cot_and_mesh():
     dets = [__import__("fpv_vision.detector", fromlist=["Detection"]).Detection(0, "person", 0.9, (0, 0, 5, 9), 1)]
     for prov, cot_p, mesh_p in (("simulated", "SIMULATED: ", "[SIM] "), ("recorded", "RECORDED: ", "[REC] "),
                                 ("live", "", "")):
-        r = spotrep.build(dets=dets, position="51.15,-1.75", activity="x" * 400, summary_text="s",
+        r = spotrep.build(dets=dets, position="42.0,-93.0", activity="x" * 400, summary_text="s",
                           callsign="FPV-VISION", provenance=prov)
         assert r["remarks"].startswith(cot_p + "SALUTE")
         assert r["mesh_text"].startswith(mesh_p + "SPOTREP") and len(r["mesh_text"]) < 200
@@ -353,10 +353,10 @@ def test_default_position_fallback(settings):
     assert svc.default_position() == ""
     settings.sensor_lat, settings.sensor_lon = 0.0, 0.0
     assert svc.default_position() == ""  # never 0,0
-    settings.sensor_lat, settings.sensor_lon = 51.15, -1.75
-    assert svc.default_position() == "51.150000, -1.750000"
-    settings.default_position = "30U WB 87427 67248"
-    assert svc.default_position() == "30U WB 87427 67248"
+    settings.sensor_lat, settings.sensor_lon = 42.0, -93.0
+    assert svc.default_position() == "42.000000, -93.000000"
+    settings.default_position = "15T WG 00000 49776"
+    assert svc.default_position() == "15T WG 00000 49776"
     settings.default_position, settings.sensor_lat, settings.sensor_lon = "", None, None
     p.source.start()
     try:

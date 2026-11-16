@@ -13,7 +13,7 @@ import time
 log = logging.getLogger(__name__)
 
 PROMPT = (
-    "You are assisting a military ISR training exercise. Describe this single video frame "
+    "You are assisting a drone video-analytics demo. Describe this single video frame "
     "from a drone or handheld camera as a short observation report: what people, vehicles "
     "and equipment are visible, how many, what they appear to be doing, and where they are "
     "in the frame relative to terrain features (e.g. treeline, road, building). "

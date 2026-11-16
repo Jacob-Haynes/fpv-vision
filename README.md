@@ -1,6 +1,6 @@
 # fpv-vision
 
-AI object detection on drone and handheld video, built as an ISR training demo. People and
+AI object detection on drone and handheld video, built as a drone/FPV video-analytics demo. People and
 vehicles are boxed, tracked and counted. You can ask a vision-language model to describe the
 scene, and send a SALUTE spot report to ATAK and over the Meshtastic mesh.
 
@@ -22,7 +22,7 @@ Supported machines:
 The badge is always drawn on the video, and the header shows the same thing. Recorded footage
 is never presented as live.
 
-> **Scope:** defensive ISR training demo for observation and reporting only. Nothing here
+> **Scope:** observation, counting and reporting only. Nothing here
 > controls, arms or steers a drone.
 >
 > **Privacy:** scene description is **offline by default**. It uses a local VLM on the HQ Mac,
@@ -398,7 +398,7 @@ the big screen or on a tablet at `http://isr-droneops.local:8110`.
 3. **Describe (1 min).** Press **Describe scene**. The pill shows `scene: VLM qwen3-vl:8b`
    (running on the HQ Mac, offline). Then quit Ollama on the HQ Mac to show it fall back to the local
    summary.
-4. **Report (2 min).** Select the snapshot, enter the observation post's grid, and press **Send
+4. **Report (2 min).** Select the snapshot, enter the observer's grid, and press **Send
    spot report**. The marker appears in ATAK, and the SPOTREP text arrives on a Heltec node.
 5. **Post-flight (2 min).** Pretend we just landed: point **Analyse** at the SD card folder.
    About 2 minutes later you have a timeline and best frames. Click a peak to jump the replay
@@ -549,3 +549,11 @@ Code layout (`fpv_vision/`):
 | `cot.py`, `spotrep.py`, `geo.py` | ATAK output, SALUTE reports, MGRS |
 | `service.py` | glue between the parts |
 | `web/` | web UI |
+
+## License
+
+MIT, see [LICENSE](LICENSE). Code only. The sample clips are downloaded at runtime from
+Wikimedia Commons under their own terms (NASA public domain; CC0) and are not part of this
+repository. YOLO weights are downloaded from Ultralytics and are licensed separately by
+Ultralytics (AGPL-3.0 or an Ultralytics enterprise licence).
+

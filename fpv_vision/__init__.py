@@ -1,3 +1,3 @@
-"""fpv-vision: live object detection on drone / handheld video for ISR training demos."""
+"""fpv-vision: live object detection and video analytics for drone / handheld footage."""
 
 __version__ = "0.1.0"
