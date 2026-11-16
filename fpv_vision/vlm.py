@@ -27,7 +27,7 @@ from fpv_vision.gemini import PROMPT, GeminiDescriber, RateLimited
 
 log = logging.getLogger(__name__)
 
-DEFAULT_VLM_MODEL = "qwen3-vl:8b"
+DEFAULT_VLM_MODEL = "qwen3-vl:8b-instruct"
 
 
 class OpenAICompatDescriber:
@@ -91,7 +91,8 @@ class OpenAICompatDescriber:
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()}},
             ]}],
-            "max_tokens": 600,
+            # Short answers only. Deliberately no Ollama `format: "json"`: MLX-runner models return 501.
+            "max_tokens": 300,
             "temperature": 0.2,
         }
         headers = {"Content-Type": "application/json"}
@@ -102,12 +103,19 @@ class OpenAICompatDescriber:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
                 data = json.loads(r.read().decode())
-            text = data["choices"][0]["message"].get("content") or ""
-            text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+            text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            text = re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()
+            self._reach_cache = (time.time(), True)  # it answered, so it is reachable
+            if not text:
+                # thinking builds sometimes spend the whole budget thinking: treat as a failure
+                raise RuntimeError(f"empty reply from {self.model} (use an -instruct build)")
             self.calls += 1
             self.last_error = ""
-            self._reach_cache = (time.time(), True)
-            return text or "(no description returned)"
+            return text
+        except RuntimeError as e:
+            self.last_error = str(e)[:200]
+            log.warning("VLM %s: %s", self.base, e)
+            raise
         except Exception as e:  # noqa: BLE001
             self.last_error = str(e)[:200]
             self._reach_cache = (time.time(), False)

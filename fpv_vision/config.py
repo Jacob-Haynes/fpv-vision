@@ -93,7 +93,7 @@ class Settings:
     # --- scene description backend (VLM) ---
     vlm_backend: str = "auto"  # auto | openai_compat | gemini | off
     vlm_url: str = ""  # bare base URL, e.g. http://isr-hq.local:11434 (Ollama)
-    vlm_model: str = "qwen3-vl:8b"
+    vlm_model: str = "qwen3-vl:8b-instruct"
     vlm_api_key: str = ""
     vlm_min_interval: float = 3.0
 
@@ -186,7 +186,7 @@ class Settings:
         s.public_url = _env("FPV_PUBLIC_URL", s.public_url)
         s.vlm_backend = _env("VLM_BACKEND", s.vlm_backend)
         s.vlm_url = _env("VLM_URL", s.vlm_url)
-        s.vlm_model = _env("VLM_MODEL", s.vlm_model) or "qwen3-vl:8b"
+        s.vlm_model = _env("VLM_MODEL", s.vlm_model) or "qwen3-vl:8b-instruct"
         s.vlm_api_key = _env("VLM_API_KEY", s.vlm_api_key)
         s.vlm_min_interval = _env_float("VLM_MIN_INTERVAL", s.vlm_min_interval)
         return s

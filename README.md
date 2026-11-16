@@ -86,7 +86,7 @@ applies when a variable is unset:
 | `TAK_HOST` / `TAK_PORT` | `isr-pi.local` / 8087 |
 | `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` | `isr-pi.local` / 1883 / `isrkit` |
 | `MQTT_PASS` | (from env; a warning is printed if missing) |
-| `VLM_URL` / `VLM_MODEL` | `http://isr-hq.local:11434` / `qwen3-vl:8b` |
+| `VLM_URL` / `VLM_MODEL` | `http://isr-hq.local:11434` / `qwen3-vl:8b-instruct` |
 | `FPV_DEVICE` | `auto`, which picks **CUDA > Apple MPS > CPU** |
 | `FPV_MODEL` | `auto`: **YOLO26s @ 640 on a GPU**, YOLO26n @ 416 on CPU |
 | `FPV_FOOTAGE_DIRS` | `~/Movies/FPV` (folders listed in the UI's footage picker) |
@@ -259,11 +259,11 @@ In the UI's **Post-flight analysis** panel, enter a path (the mounted SD card fo
   Gemini. An optional auto-summary every N seconds is set in the UI; it skips empty scenes.
 
 **HQ Mac (M5 Pro, 64 GB) setup.** The default model is
-[`qwen3-vl:8b`](https://ollama.com/library/qwen3-vl/tags): 6.2 GB, verified on ollama.com, and it
+[`qwen3-vl:8b-instruct`](https://ollama.com/library/qwen3-vl/tags): 6.2 GB, verified on ollama.com, and it
 needs Ollama ≥ 0.12.7.
 
 ```bash
-ollama pull qwen3-vl:8b
+ollama pull qwen3-vl:8b-instruct
 # Ollama only listens on localhost by default. Make it reachable on the hotspot:
 launchctl setenv OLLAMA_HOST 0.0.0.0:11434   # then restart the Ollama app
 curl http://isr-hq.local:11434/v1/models     # from the Drone-ops Mac
@@ -278,8 +278,12 @@ can accept slower replies:
 | `qwen2.5vl:32b` | 21 GB |
 | `gemma3:27b` | 17 GB |
 
-Set `VLM_MODEL` to use one. If replies are slow, try `qwen3-vl:8b-instruct`, which skips the
-"thinking" step. Any `<think>` text is stripped from replies.
+Set `VLM_MODEL` to use one. Use an **instruct** build: the stock `qwen3-vl:8b` tag is a
+"thinking" model. It thinks even with `think:false`, takes far longer and sometimes returns an
+empty answer, whereas `qwen3-vl:8b-instruct` answers in 1–5 s. An empty reply counts as a
+failure, so the chain falls back to Gemini or the local summary. Replies are capped at 300
+tokens, and we never request Ollama's `format: "json"`, because MLX-runner models reject it
+with HTTP 501.
 
 ## Performance: measured
 
@@ -377,12 +381,12 @@ live source.
 Every 10 s, fpv-vision publishes this retained message to `isrkit/heartbeat/fpv-vision`:
 
 ```json
-{"tool":"fpv-vision","host":"isr-droneops","url":"http://isr-droneops.local:8110/","mode":"replay","status":"ok","ts":1794836403,"detail":"yolo26s mps 2160p 58fps, VLM qwen3-vl:8b @ isr-hq"}
+{"tool":"fpv-vision","host":"isr-droneops","url":"http://isr-droneops.local:8110/","mode":"replay","status":"ok","ts":1794836403,"detail":"yolo26s mps 2160p 58fps, VLM qwen3-vl:8b-instruct @ isr-hq"}
 ```
 
 - `mode` is `replay` | `simulate` | `mps` | `cuda` | `cpu`, which is the video source type, or
   the accelerator when the input is live.
-- `detail` is optional and human-readable, e.g. `"yolo26s mps 1080p 58fps, VLM qwen3-vl:8b @ isr-hq"`.
+- `detail` is optional and human-readable, e.g. `"yolo26s mps 1080p 58fps, VLM qwen3-vl:8b-instruct @ isr-hq"`.
 - `status` is `ok`, `degraded` (no detector, or the source is reconnecting) or `error`.
 - On a clean exit it publishes `stopped`. The MQTT last-will publishes `error` if the process dies.
 - `host` follows contract C4.1: env `ISR_HOST` if set, otherwise the lowercased short
@@ -414,7 +418,7 @@ the big screen or on a tablet at `http://isr-droneops.local:8110`.
 2. **Replay as live (3 min).** Play a playlist of 2–3 flights. Show boxes, track IDs and the
    *unique* count compared with *in view*. Point at the tiles: 60 fps source, detect fps, about
    40 ms latency. Scrub to an interesting moment and pause on it.
-3. **Describe (1 min).** Press **Describe scene**. The pill shows `scene: VLM qwen3-vl:8b`
+3. **Describe (1 min).** Press **Describe scene**. The pill shows `scene: VLM qwen3-vl:8b-instruct`
    (running on the HQ Mac, offline). Then quit Ollama on the HQ Mac to show it fall back to the local
    summary.
 4. **Report (2 min).** Select the snapshot, enter the observer's grid, and press **Send
@@ -523,7 +527,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `MQTT_ENABLED` / `MESH_ENABLED` | 1 / 1 | broker connection and heartbeat / mesh sends |
 | `ISR_HOST` / `FPV_PUBLIC_URL` | gethostname / `http://<host>.local:<port>/` | heartbeat identity |
 | `SENSOR_LAT` / `SENSOR_LON` | – | shared fallback spot-report position (never 0,0) |
-| `VLM_BACKEND` / `VLM_URL` / `VLM_MODEL` / `VLM_MIN_INTERVAL` | auto / – / `qwen3-vl:8b` / 3 | scene description |
+| `VLM_BACKEND` / `VLM_URL` / `VLM_MODEL` / `VLM_MIN_INTERVAL` | auto / – / `qwen3-vl:8b-instruct` / 3 | scene description |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_MIN_INTERVAL` | – / `gemini-3.8-flash` / 10 | cloud fallback |
 | `GEMINI_PERIODIC_SECONDS` | 0 | auto-summary period for the active backend |
 

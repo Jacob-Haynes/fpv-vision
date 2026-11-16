@@ -163,19 +163,19 @@ def fake_ollama():
 
 
 def test_openai_compat_backend(fake_ollama):
-    vlm = OpenAICompatDescriber(fake_ollama + "/v1", "qwen3-vl:8b", min_interval=0.5)
+    vlm = OpenAICompatDescriber(fake_ollama + "/v1", "qwen3-vl:8b-instruct", min_interval=0.5)
     assert vlm.base == fake_ollama  # path stripped: contract says bare base URL
     assert vlm.probe()
     text = vlm.describe(b"\xff\xd8jpeg", context="2 people")
     assert text == "3 people beside a pickup at the treeline."
     path, body = _FakeOllama.requests[-1]
-    assert path == "/v1/chat/completions" and body["model"] == "qwen3-vl:8b"
+    assert path == "/v1/chat/completions" and body["model"] == "qwen3-vl:8b-instruct"
     img = body["messages"][0]["content"][1]
     assert img["type"] == "image_url" and img["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_scene_chain_falls_back_to_gemini_then_off():
-    dead = OpenAICompatDescriber("http://127.0.0.1:9", "qwen3-vl:8b")  # nothing listens on port 9
+    dead = OpenAICompatDescriber("http://127.0.0.1:9", "qwen3-vl:8b-instruct")  # nothing listens on port 9
     gem = GeminiDescriber("key", "gemini-x", min_interval=1)
 
     class Models:
@@ -400,3 +400,34 @@ def test_replay_snapshot_is_marked_recorded(settings, tmp_path):
         assert snap["provenance"] == "recorded" and snap["video_file"] == "DJI_0001.MP4.avi"
     finally:
         p.stop()
+
+
+def test_empty_vlm_reply_falls_back(fake_ollama, monkeypatch):
+    orig = _FakeOllama.do_POST
+
+    def empty(self):
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"choices": [{"message": {"content": "<think>still thinking"}}]}).encode())
+
+    monkeypatch.setattr(_FakeOllama, "do_POST", empty)
+    vlm = OpenAICompatDescriber(fake_ollama, "qwen3-vl:8b-instruct", min_interval=0.5)
+    with pytest.raises(RuntimeError, match="empty reply"):
+        vlm.describe(b"jpeg")
+    gem = GeminiDescriber("key", "gemini-x", min_interval=1)
+    gem._client = type("C", (), {"models": type("M", (), {"generate_content": lambda self, model, contents:
+                                                              type("R", (), {"text": "cloud"})()})()})()
+    chain = SceneDescriber("openai_compat", vlm, gem)
+    vlm._last_call = 0
+    assert chain.describe(b"jpeg") == ("cloud", "gemini")
+    monkeypatch.setattr(_FakeOllama, "do_POST", orig)
+
+
+def test_vlm_request_is_capped_and_has_no_json_format(fake_ollama):
+    vlm = OpenAICompatDescriber(fake_ollama, "qwen3-vl:8b-instruct", min_interval=0.5)
+    vlm.describe(b"jpeg")
+    _, body = _FakeOllama.requests[-1]
+    assert body["max_tokens"] <= 300 and "format" not in body and "response_format" not in body
+    assert body["model"] == "qwen3-vl:8b-instruct"

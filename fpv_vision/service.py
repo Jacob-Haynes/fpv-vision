@@ -321,7 +321,7 @@ class Service:
         return f"http://{short_hostname()}.local:{self.settings.port}/"
 
     def detail(self) -> str:
-        """Human summary for the launcher, e.g. 'yolo26s mps 1080p 42fps, VLM qwen3-vl:8b @ isr-hq'."""
+        """Human summary for the launcher, e.g. 'yolo26s mps 1080p 42fps, VLM qwen3-vl:8b-instruct @ isr-hq'."""
         p = self.pipeline
         info = p.detector.info()
         st = p.source.status()

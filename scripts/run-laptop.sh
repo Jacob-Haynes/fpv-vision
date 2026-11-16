@@ -65,7 +65,7 @@ export MQTT_HOST="${MQTT_HOST:-isr-pi.local}"
 export MQTT_PORT="${MQTT_PORT:-1883}"
 export MQTT_USER="${MQTT_USER:-isrkit}"
 export VLM_URL="${VLM_URL:-http://isr-hq.local:11434}"
-export VLM_MODEL="${VLM_MODEL:-qwen3-vl:8b}"
+export VLM_MODEL="${VLM_MODEL:-qwen3-vl:8b-instruct}"
 if [ -z "${MQTT_PASS:-}" ]; then
     echo "[fpv-vision] WARNING: MQTT_PASS not set; heartbeat and mesh texts will fail (guest only works on the Pi)" >&2
 fi
