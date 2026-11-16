@@ -243,7 +243,8 @@ class Pipeline:
                 n, t_window = 0, now
                 # adaptive back-off: protect the overlay frame rate first
                 target = self.settings.target_fps
-                if self.stats.render_fps and self.stats.render_fps < 0.85 * min(target, src.fps_in or target):
+                src_fps = (src.fps_unique if src.spec.is_live else src.fps_in) or target
+                if self.stats.render_fps and self.stats.render_fps < 0.85 * min(target, src_fps):
                     gap = min(1.0, gap + 0.02)
                 elif gap > 0:
                     gap = max(0.0, gap - 0.02)

@@ -99,9 +99,13 @@ so the Macs must use `isrkit`, which pi-platform creates.
 **macOS permissions** (one-off, per terminal app):
 
 - **Camera** (for the built-in camera, iPhone Continuity Camera or a USB capture card).
-  fpv-vision asks for it at startup. If you miss the prompt, go to *System Settings → Privacy &
-  Security → Camera* and allow Terminal (or iTerm/Claude), then restart. The UI shows the
-  current state next to the source.
+  **Start fpv-vision from Terminal.app** (or iTerm). macOS grants camera access to the *app
+  that launched the process*. Processes started from inside the Claude app, or from other
+  sandboxed or helper launchers, are **denied silently**: the camera opens but delivers
+  nothing, and no prompt appears. Running from Terminal.app is confirmed to work on the
+  Drone-ops Mac. fpv-vision asks for access at startup; if you miss the prompt, go to *System
+  Settings → Privacy & Security → Camera*, allow Terminal, and restart. The UI shows the current
+  permission state next to the source.
 - **Screen Recording** (only for the screen-mirror source). Go to *System Settings → Privacy &
   Security → Screen & System Audio Recording*, allow your terminal app, and restart it. Without
   it macOS returns black frames, and the UI says so.
@@ -189,7 +193,27 @@ video hacks) is deliberately not used.
     governs the TV/HDMI frame rates.
   - Put the camera in **Video mode, not recording**. Keep it on external power: the battery
     drains fast with HDMI out and the screen on.
-- **What resolution arrives:** GoPro doesn't publish the HERO4's live-preview HDMI resolution.
+- **Measured on the Drone-ops Mac:** HERO4 set to 1080p30 → micro-HDMI → Guermok "USB3 Video"
+  (AVFoundation index 1, so `camera:USB3 Video`). It gives a clean feed with no OSD in frame.
+  **The card always outputs 1920×1080 @ 60 fps, but only 30 of those are real**; every second
+  frame is a copy. fpv-vision **drops padded duplicates** before inference. It compares each
+  frame with the previous one on a strided full-resolution sample (`FPV_DEDUP_THRESHOLD`,
+  default 0.5 mean absolute difference; `FPV_DEDUP=0` disables it). The UI then shows
+  **"receiving 60 / unique 30 fps"**, and detection, tracking and the FPS tiles use only the
+  real frames. To calibrate on new hardware, run this from Terminal.app with something moving
+  in front of the camera:
+
+  ```bash
+  .venv/bin/python -m fpv_vision --probe-camera "camera:USB3 Video"
+  ```
+
+  Duplicates cluster near 0; real frames sit well above.
+- **Recording resolution ≠ HDMI preview.** The HERO4's video mode (e.g. 4K30, 2.7K, 1080p60)
+  sets what it **records to the SD card**. The HDMI port sends the **live preview**, at a
+  resolution and frame rate the camera chooses, and the capture card then scales or pads that
+  to its own output mode. So 1080p30 on the camera became "1080p60 with duplicates" on the
+  card. Trust the UI's readout, not the camera menu.
+- **What resolution arrives (other setups):** GoPro doesn't publish the HERO4's live-preview HDMI resolution.
   The manual only says HDMI is certified up to 1080p. One forum user saw 720×480 from a HERO4 on
   their capture setup, and others report 1080p. **The UI shows what the card actually
   negotiated** (source pill and "device mode …, receiving N fps"). If it reads 720×480, set the

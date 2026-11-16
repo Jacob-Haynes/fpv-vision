@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -20,6 +21,8 @@ def parse_args(argv=None):
                                     "rtsp://..., simulate")
     p.add_argument("--replay", metavar="PATH", nargs="+", help="replay footage file(s)/folder(s) as live, looping")
     p.add_argument("--list-cameras", action="store_true", help="print cameras (name -> index) and exit")
+    p.add_argument("--probe-camera", metavar="SPEC", help="open a camera (e.g. 'camera:USB3 Video'), print the "
+                   "negotiated mode, received fps and frame-to-frame difference stats (for FPV_DEDUP_THRESHOLD), exit")
     p.add_argument("--device", help="auto (CUDA > MPS > CPU), cpu, mps, cuda")
     p.add_argument("--tak-host")
     p.add_argument("--tak-port", type=int)
@@ -105,6 +108,48 @@ def run_benchmark(settings: Settings, n: int) -> int:
     return 0
 
 
+def probe_camera(settings: Settings, spec: str, n: int = 180) -> int:
+    """Calibrate duplicate-frame dropping on real hardware (run from Terminal.app on macOS)."""
+    import time
+
+    import cv2
+
+    from fpv_vision import sources
+
+    if sys.platform == "darwin":
+        print("camera permission:", sources.request_camera_permission())
+    src = sources.VideoSource(spec, width=settings.capture_width, height=settings.capture_height,
+                              fps=settings.capture_fps)
+    cap = src._open_live()
+    if not cap.isOpened():
+        print("could not open", spec, src.resolved)
+        return 1
+    print("device:", src.resolved, "| negotiated:", src._describe_mode(cap))
+    diffs, prev, t0, got = [], None, None, 0
+    while got < n:
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        t0 = t0 or time.time()
+        got += 1
+        sample = frame[::8, ::8]
+        if prev is not None:
+            diffs.append(float(cv2.absdiff(sample, prev).mean()))
+        prev = sample.copy()
+    dt = time.time() - t0
+    cap.release()
+    diffs.sort()
+    pct = lambda q: diffs[min(len(diffs) - 1, int(q * len(diffs)))]  # noqa: E731
+    thr = float(os.environ.get("FPV_DEDUP_THRESHOLD", "0.5") or 0.5)
+    dup = sum(d < thr for d in diffs)
+    print(f"received {got} frames in {dt:.1f}s = {got / dt:.1f} fps; frame shape {frame.shape[1]}x{frame.shape[0]}")
+    print("mean-abs-diff between consecutive frames (stride-8 sample):")
+    print("  " + "  ".join(f"p{int(q * 100)}={pct(q):.2f}" for q in (0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0)))
+    print(f"  {dup}/{len(diffs)} below FPV_DEDUP_THRESHOLD={thr} -> unique ~{(got - dup) / dt:.1f} fps")
+    print("Move something in front of the camera while probing; padded duplicates show as a cluster near 0.")
+    return 0
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -124,6 +169,9 @@ def main(argv=None) -> int:
 
     if args.benchmark:
         return run_benchmark(settings, args.benchmark)
+
+    if args.probe_camera:
+        return probe_camera(settings, args.probe_camera)
 
     import uvicorn
 

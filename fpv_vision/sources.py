@@ -225,6 +225,46 @@ def gopro_stop_webcam(ip: str) -> None:
             pass
 
 
+# ---------------------------------------------------------------- duplicate-frame filter
+
+
+class DuplicateFilter:
+    """Drops repeated frames from capture devices that pad their output rate.
+
+    Example: a GoPro HERO4 at 1080p30 into a USB capture card that always outputs 60 fps —
+    every second frame is a copy. Counting those as real would double the FPS readout, make
+    the detector re-run on identical pixels and confuse ByteTrack's motion model.
+
+    A frame is a duplicate when the mean absolute difference over a strided full-resolution
+    sample (no averaging, so real sensor noise keeps real frames well above the threshold) is
+    below ``threshold``. At most ``max_run`` duplicates in a row are dropped, so a genuinely
+    static, noise-free picture (e.g. a paused screen) still refreshes.
+    """
+
+    def __init__(self, threshold: float = 0.5, stride: int = 8, max_run: int = 3, enabled: bool = True):
+        self.threshold, self.stride, self.max_run, self.enabled = threshold, stride, max_run, enabled
+        self._prev: np.ndarray | None = None
+        self._run = 0
+        self.dropped = 0
+
+    def is_duplicate(self, frame: np.ndarray) -> bool:
+        if not self.enabled:
+            return False
+        sample = frame[:: self.stride, :: self.stride]
+        prev = self._prev
+        self._prev = sample.copy()
+        if prev is None or prev.shape != sample.shape:
+            self._run = 0
+            return False
+        diff = float(cv2.absdiff(sample, prev).mean())
+        if diff < self.threshold and self._run < self.max_run:
+            self._run += 1
+            self.dropped += 1
+            return True
+        self._run = 0
+        return False
+
+
 # ---------------------------------------------------------------- synthetic frames
 
 
@@ -274,7 +314,11 @@ class VideoSource:
         self._thread: threading.Thread | None = None
         self.connected = False
         self.error = ""
-        self.fps_in = 0.0
+        self.fps_in = 0.0  # frames received from the device
+        self.fps_unique = 0.0  # after dropping padded duplicates (what the pipeline sees)
+        self.dedup = DuplicateFilter(
+            threshold=float(os.environ.get("FPV_DEDUP_THRESHOLD", "0.5") or 0.5),
+            enabled=os.environ.get("FPV_DEDUP", "1").strip().lower() not in ("0", "false", "off", "no"))
         self.resolved = ""
         self._gopro_ip: str | None = None
         self.crop: tuple[float, float, float, float] | None = None  # normalised x, y, w, h
@@ -340,6 +384,8 @@ class VideoSource:
             "width": w,
             "height": h,
             "fps_in": round(self.fps_in, 1),
+            "fps_unique": round(self.fps_unique if self.spec.is_live else self.fps_in, 1),
+            "duplicates_dropped": self.dedup.dropped,
             "frames": fid,
             "crop": self.crop,
             "negotiated": self.negotiated,
@@ -491,7 +537,7 @@ class VideoSource:
             region = sct.monitors[mon]
             self.resolved = f"monitor {mon} {region['width']}x{region['height']}"
             period = 1 / 30
-            n, t_window = 0, time.time()
+            n, u, t_window = 0, 0, time.time()
             while not self._stop.is_set():
                 t0 = time.time()
                 try:
@@ -508,11 +554,14 @@ class VideoSource:
                 else:
                     self.error = ""
                 self.connected = True
-                self._publish(frame, t0)
                 n += 1
+                if not self.dedup.is_duplicate(frame):
+                    self._publish(frame, t0)
+                    u += 1
                 if t0 - t_window >= 2.0:
                     self.fps_in = n / (t0 - t_window)
-                    n, t_window = 0, t0
+                    self.fps_unique = u / (t0 - t_window)
+                    n, u, t_window = 0, 0, t0
                 rest = period - (time.time() - t0)
                 if rest > 0:
                     time.sleep(rest)
@@ -583,7 +632,7 @@ class VideoSource:
             backoff = 1.0
             self.negotiated = self._describe_mode(cap)
             log.info("source %s opened (%s) %s", self.spec.raw, self.resolved, self.negotiated)
-            n, t_window, fails = 0, time.time(), 0
+            n, u, t_window, fails = 0, 0, time.time(), 0
             while not self._stop.is_set():
                 ok, frame = cap.read()
                 if not ok or frame is None:
@@ -595,11 +644,14 @@ class VideoSource:
                     continue
                 fails = 0
                 ts = time.time()
-                self._publish(frame, ts)
                 n += 1
+                if not self.dedup.is_duplicate(frame):
+                    self._publish(frame, ts)
+                    u += 1
                 if ts - t_window >= 2.0:
                     self.fps_in = n / (ts - t_window)
-                    n, t_window = 0, ts
+                    self.fps_unique = u / (ts - t_window)
+                    n, u, t_window = 0, 0, ts
             cap.release()
             self.connected = False
             if not self._stop.is_set():

@@ -276,3 +276,30 @@ def test_service_heartbeat_modes(settings):
     assert svc.mode() == "replay"
     p.source = sources.VideoSource("camera:iPhone")
     assert svc.mode() == "cpu"  # FakeDetector has no accelerator attr -> cpu
+
+
+def test_duplicate_filter_drops_padded_frames_only():
+    rng = np.random.default_rng(0)
+    base = rng.integers(0, 255, (1080, 1920, 3), dtype=np.uint8)
+    f = sources.DuplicateFilter()
+    seq = []
+    for i in range(10):  # a 30 fps camera padded to 60: each real frame sent twice
+        real = cv2.add(base, rng.integers(0, 4, base.shape, dtype=np.uint8))  # sensor noise
+        seq += [real, real.copy()]
+    kept = [not f.is_duplicate(x) for x in seq]
+    assert kept == [True, False] * 10
+    assert f.dropped == 10
+
+
+def test_duplicate_filter_keeps_noisy_static_scene_and_caps_runs():
+    rng = np.random.default_rng(1)
+    base = rng.integers(0, 255, (720, 1280, 3), dtype=np.uint8)
+    f = sources.DuplicateFilter()
+    # real frames of a static scene still differ by sensor noise -> all kept
+    noisy = [cv2.add(base, rng.integers(0, 6, base.shape, dtype=np.uint8)) for _ in range(6)]
+    assert all(not f.is_duplicate(x) for x in noisy)
+    # perfectly frozen picture: at most 3 in a row dropped, then one passes
+    f2 = sources.DuplicateFilter(max_run=3)
+    kept = [not f2.is_duplicate(base) for _ in range(9)]
+    assert kept == [True, False, False, False, True, False, False, False, True]
+    assert sources.DuplicateFilter(enabled=False).is_duplicate(base) is False
