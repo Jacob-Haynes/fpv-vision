@@ -19,6 +19,27 @@ import time
 _EVENT_RE = re.compile(r"<event\b.*?</event>", re.S)
 _UID_RE = re.compile(r"""<event\b[^>]*\buid=(["'])(.*?)\1""")
 _SA_RE = re.compile(r"""<contact\b[^>]*\bcallsign=(["'])(.*?)\1[^>]*\bendpoint=""")
+_STORE_TYPE_RE = re.compile(r"^(a-[fhupansjk]-[ZPAGSUF]|b-m-p)")
+_TYPE_RE = re.compile(r"""<event\b[^>]*\btype=(["'])(.*?)\1""")
+_POINT_RE = re.compile(r"""<point\b[^>]*\blat=(["'])(.*?)\1[^>]*\blon=(["'])(.*?)\3""")
+_LINK_RE = re.compile(r"""<link\b[^>]*\buid=(["'])(.*?)\1""")
+
+
+def store_rejection(ev: str, eud_uids: set[str]) -> str | None:
+    """Why OTS 1.8.3 would NOT store this relayed event as a marker (None = it is stored)."""
+    tm = _TYPE_RE.search(ev)
+    cot_type = tm.group(2) if tm else ""
+    if not _STORE_TYPE_RE.match(cot_type) or cot_type.startswith("b-m-p-s-p-loc"):
+        return f"type {cot_type!r} not stored"
+    if "<takv" in ev or _SA_RE.search(ev):
+        return "has takv/contact endpoint (treated as an EUD)"
+    pm = _POINT_RE.search(ev)
+    if not pm or (float(pm.group(2)) == 0 and float(pm.group(4)) == 0):
+        return "no real position"
+    for lm in _LINK_RE.finditer(ev):
+        if lm.group(2) not in eud_uids:
+            return f"link uid {lm.group(2)!r} is not an EUD"
+    return None
 
 
 class FakeOTS:
@@ -34,6 +55,8 @@ class FakeOTS:
         self.dropped: list[tuple[str, str]] = []  # (reason, event xml)
         self.registrations: list[tuple[str, str]] = []  # (uid, callsign)
         self.refused: list[tuple[str, str]] = []
+        self.stored: list[str] = []  # events OTS would also store as markers
+        self.not_stored: list[tuple[str, str]] = []  # (reason, event)
         self.connections = 0
         self._conns: list[socket.socket] = []
         self._lock = threading.Lock()
@@ -119,3 +142,8 @@ class FakeOTS:
                 self.dropped.append(("unregistered-sender", ev))  # rule 1
                 return
             self.accepted.append((state["uid"], ev))
+            why = store_rejection(ev, set(self.callsigns.values()))
+            if why is None:
+                self.stored.append(ev)
+            else:
+                self.not_stored.append((why, ev))

@@ -173,7 +173,8 @@ class Service:
         if send_cot:
             xml = cot.spot_report_cot(lat=rep["lat"], lon=rep["lon"], callsign=rep["callsign"],
                                       remarks=rep["remarks"], sender=self.settings.callsign,
-                                      sender_uid=getattr(self.tak, "uid", None))
+                                      sender_uid=getattr(self.tak, "uid", None),
+                                      sender_callsign=getattr(self.tak, "callsign", None))
             queued = self.tak.send(xml)
             out["cot"] = {"queued": queued, "connected": self.tak.connected,
                           "registered": getattr(self.tak, "registered", False),

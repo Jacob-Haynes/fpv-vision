@@ -359,6 +359,14 @@ taken. So `fpv_vision/tak_client.py` does the following:
 - sends spot reports on that same connection, and only after registration;
 - reads and discards what OTS sends back, so the server never blocks on us.
 
+Spot-report markers are also built so OTS **stores** them, which puts them on OTS's web map
+(contract C5.5):
+- type `a-u-G`;
+- no `<takv>` and no `<contact endpoint>`;
+- never at 0,0;
+- `<link>` only to our own registration uid, with `parent_callsign` and `precisionlocation`
+  set to USER for the operator-entered position.
+
 The header pill reads "TAK registered as FPV <host>" once the SA has gone out. The tests in
 `tests/test_tak_client.py` run against a fake OTS (`tests/fake_ots.py`) that enforces all
 three rules.

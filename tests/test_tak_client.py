@@ -29,9 +29,9 @@ def client(ots, **kw):
     return TakClient("127.0.0.1", ots.port, **kw).start()
 
 
-def spot(uid="fpv-vision-spot-1", remarks="RECORDED: SALUTE ..."):
+def spot(uid="fpv-vision-spot-1", remarks="RECORDED: SALUTE ...", sender_uid="isrkit-fpv-vision-teststation"):
     return cot.spot_report_cot(lat=42.0, lon=-93.0, callsign="SPOT 161230", remarks=remarks, uid=uid,
-                               sender_uid="isrkit-fpv-vision-teststation")
+                               sender_uid=sender_uid, sender_callsign="FPV teststation")
 
 
 def _t(s: str) -> float:
@@ -184,3 +184,42 @@ def test_rate_limit_per_uid_and_disabled():
     c._last_uid["a"] -= 6
     assert c.send(spot(uid="a"))
     assert TakClient(enabled=False).send(spot()) is False
+
+
+# ------------------------------------------------------------------ C5.5 storability
+
+
+def test_store_rules_of_the_fake():
+    from fake_ots import store_rejection
+
+    eud = {"isrkit-fpv-vision-teststation"}
+    assert store_rejection(spot(), eud) is None
+    assert "not an EUD" in store_rejection(spot(sender_uid="fpv-vision-spot-0"), eud)
+    sa = registration_sa(uid="u", callsign="c", lat=42.0, lon=-93.0, device="d", version="1")
+    assert "takv" in store_rejection(sa, eud) or "not stored" in store_rejection(sa, eud)
+    zero = spot().replace('lat="42.0000000" lon="-93.0000000"', 'lat="0" lon="0"')
+    assert store_rejection(zero, eud) == "no real position"
+    assert "not stored" in store_rejection(spot().replace('type="a-u-G"', 'type="b-m-p-s-p-loc"'), eud)
+    assert store_rejection(spot().replace('type="a-u-G"', 'type="b-m-p-s-m"'), eud) is None
+
+
+def test_spot_report_marker_is_storable(ots):
+    c = client(ots)
+    try:
+        assert c.send(spot())
+        assert wait_for(lambda: ots.stored or ots.not_stored, timeout=5)
+        assert ots.not_stored == [] and len(ots.stored) == 1
+        ev = ET.fromstring(ots.stored[0].encode())
+        link = ev.find("detail/link")
+        assert link.get("uid") == c.uid and link.get("parent_callsign") == c.callsign
+        assert ev.find("detail/contact").get("endpoint") is None and ev.find("detail/takv") is None
+        assert ev.find("detail/precisionlocation").get("geopointsrc") == "USER"
+    finally:
+        c.stop()
+
+
+def test_marker_without_registered_uid_has_no_link_and_refuses_0_0():
+    xml = cot.spot_report_cot(lat=42.0, lon=-93.0, callsign="SPOT", remarks="r")
+    assert "<link" not in xml
+    with pytest.raises(ValueError):
+        cot.spot_report_cot(lat=0.0, lon=0.0, callsign="SPOT", remarks="r")
