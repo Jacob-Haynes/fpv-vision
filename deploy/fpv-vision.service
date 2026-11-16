@@ -1,0 +1,23 @@
+[Unit]
+Description=FPV Vision - live object detection on drone/handheld video (ISR demo)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fpv-vision
+Group=fpv-vision
+SupplementaryGroups=video
+WorkingDirectory=/opt/fpv-vision
+EnvironmentFile=-/etc/fpv-vision.env
+Environment=PYTHONUNBUFFERED=1
+Environment=FPV_DATA_DIR=/var/lib/fpv-vision
+Environment=YOLO_CONFIG_DIR=/var/lib/fpv-vision/.ultralytics
+ExecStart=/opt/fpv-vision/deploy/start.sh
+Restart=on-failure
+RestartSec=5
+# Leave a core for the TAK server / mesh bridge when they share the Pi
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

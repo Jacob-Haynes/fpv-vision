@@ -1,0 +1,10 @@
+[project]
+name = "fpv-vision"
+version = "0.1.0"
+description = "Live object detection on drone/handheld video for ISR training demos (Raspberry Pi 5 CPU)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = [".", "tests"]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

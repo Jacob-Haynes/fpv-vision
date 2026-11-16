@@ -1,0 +1,351 @@
+"""Capture -> detect/track -> annotate -> MJPEG, plus snapshots and clip recording.
+
+Two worker threads keep the overlay smooth on a CPU-only Pi:
+
+* the **detect** thread always works on the newest captured frame and skips whatever
+  arrived while it was busy (adaptive frame-skip). If the render loop starts missing its
+  target rate, the detector backs off with a small gap between inferences to free CPU;
+  when there is headroom the gap shrinks back to zero.
+* the **render** thread draws the latest boxes on every new frame at up to
+  ``target_fps`` and encodes the JPEG served to browsers.
+
+Boxes can therefore lag the video by one inference (~100-250 ms on a Pi 5).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import time
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from fpv_vision import annotate, summary
+from fpv_vision.detector import Detection, Detector
+from fpv_vision.sources import VideoSource
+
+log = logging.getLogger(__name__)
+
+MIN_TRACK_HITS = 3  # a track must be seen this many times before it is counted
+
+
+class TrackCounter:
+    """Unique-object counts using tracker IDs, so one person walking through is counted once."""
+
+    def __init__(self, min_hits: int = MIN_TRACK_HITS):
+        self.min_hits = min_hits
+        self._hits: dict[int, int] = defaultdict(int)
+        self._label: dict[int, str] = {}
+        self._counted: set[int] = set()
+        self.totals: dict[str, int] = defaultdict(int)
+        self.untracked_peak: dict[str, int] = defaultdict(int)
+
+    def update(self, dets: list[Detection]) -> None:
+        untracked: dict[str, int] = defaultdict(int)
+        for d in dets:
+            if d.track_id is None:
+                untracked[d.label] += 1
+                continue
+            self._hits[d.track_id] += 1
+            self._label.setdefault(d.track_id, d.label)
+            if d.track_id not in self._counted and self._hits[d.track_id] >= self.min_hits:
+                self._counted.add(d.track_id)
+                self.totals[self._label[d.track_id]] += 1
+        for k, v in untracked.items():
+            self.untracked_peak[k] = max(self.untracked_peak[k], v)
+
+    def reset(self) -> None:
+        self.__init__(self.min_hits)
+
+    def snapshot(self) -> dict[str, int]:
+        return dict(self.totals)
+
+
+@dataclass
+class PipelineStats:
+    render_fps: float = 0.0
+    detect_fps: float = 0.0
+    detect_ms: float = 0.0
+    detect_gap_ms: float = 0.0
+    skip_ratio: float = 0.0  # captured frames per detection
+    extra: dict = field(default_factory=dict)
+
+
+class Recorder:
+    def __init__(self, clips_dir: Path, max_seconds: int = 300):
+        self.clips_dir = clips_dir
+        self.max_seconds = max_seconds
+        self._writer: cv2.VideoWriter | None = None
+        self.path: Path | None = None
+        self.started = 0.0
+        self.fps = 10.0
+        self.size: tuple[int, int] | None = None
+        self._frames = 0
+        self._lock = threading.Lock()
+
+    @property
+    def active(self) -> bool:
+        return self.path is not None
+
+    def start(self, fps: float) -> Path:
+        with self._lock:
+            if self._writer is not None and self.path:
+                return self.path
+            self.clips_dir.mkdir(parents=True, exist_ok=True)
+            self.path = self.clips_dir / time.strftime("clip_%Y%m%d_%H%M%SZ.mp4", time.gmtime())
+            self.fps = max(5.0, min(30.0, round(fps or 10.0)))
+            self.started = time.time()
+            self._frames = 0
+            self.size = None
+            return self.path
+
+    def write(self, frame: np.ndarray) -> None:
+        with self._lock:
+            if self.path is None:
+                return
+            if self._writer is None:
+                h, w = frame.shape[:2]
+                self.size = (w, h)
+                # mp4v plays in VLC/most players; browsers may need download-then-play.
+                self._writer = cv2.VideoWriter(str(self.path), cv2.VideoWriter_fourcc(*"mp4v"), self.fps, self.size)
+            if (frame.shape[1], frame.shape[0]) != self.size:
+                frame = cv2.resize(frame, self.size)
+            # keep real-time duration: write as many frames as wall-clock says we owe
+            owed = int((time.time() - self.started) * self.fps) + 1 - self._frames
+            for _ in range(max(0, min(owed, 5))):
+                self._writer.write(frame)
+                self._frames += 1
+        if time.time() - self.started > self.max_seconds:
+            self.stop()
+
+    def stop(self) -> Path | None:
+        with self._lock:
+            p = self.path
+            if self._writer is not None:
+                self._writer.release()
+            self._writer, self.path = None, None
+            return p
+
+
+class Pipeline:
+    def __init__(self, settings, detector: Detector, source: VideoSource):
+        self.settings = settings
+        self.detector = detector
+        self.source = source
+        self.counter = TrackCounter()
+        self.stats = PipelineStats()
+        self.recorder = Recorder(settings.clips_dir, settings.max_clip_seconds)
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._dets: list[Detection] = []
+        self._dets_frame_shape: tuple[int, int] = (0, 0)
+        self._dets_ts = 0.0
+        self._jpeg = b""
+        self._jpeg_seq = 0
+        self._raw_frame: np.ndarray | None = None
+        self._annotated: np.ndarray | None = None
+        self._threads: list[threading.Thread] = []
+        self.hud_mode = "LOCAL"
+
+    # ------------------------------------------------------------ lifecycle
+    def start(self) -> "Pipeline":
+        self.source.start()
+        for target, name in ((self._detect_loop, "detect"), (self._render_loop, "render")):
+            t = threading.Thread(target=target, name=name, daemon=True)
+            t.start()
+            self._threads.append(t)
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        self.recorder.stop()
+        self.source.stop()
+        for t in self._threads:
+            t.join(timeout=3)
+
+    def switch_source(self, source: VideoSource) -> None:
+        old = self.source
+        self.source = source
+        source.start()
+        old.stop()
+        with self._lock:
+            self._dets = []
+        self.detector.reset_tracks()
+        log.info("switched source to %s", source.spec.raw)
+
+    # ------------------------------------------------------------ accessors
+    def latest_jpeg(self) -> tuple[int, bytes]:
+        with self._lock:
+            return self._jpeg_seq, self._jpeg
+
+    def latest_frames(self) -> tuple[np.ndarray | None, np.ndarray | None]:
+        with self._lock:
+            raw = None if self._raw_frame is None else self._raw_frame.copy()
+            ann = None if self._annotated is None else self._annotated.copy()
+            return raw, ann
+
+    def current_detections(self) -> tuple[list[Detection], tuple[int, int]]:
+        with self._lock:
+            return list(self._dets), self._dets_frame_shape
+
+    def current_counts(self) -> dict[str, int]:
+        dets, _ = self.current_detections()
+        return summary.count_by_label(dets)
+
+    # ------------------------------------------------------------ workers
+    def _detect_loop(self) -> None:
+        last_id = -1
+        gap = 0.0
+        n, t_window, frames_at_window = 0, time.time(), 0
+        while not self._stop.is_set():
+            src = self.source
+            fid, frame, _ = src.latest()
+            if frame is None or fid == last_id:
+                time.sleep(0.005)
+                continue
+            last_id = fid
+            t0 = time.perf_counter()
+            try:
+                dets = self.detector.detect(frame)
+            except Exception as e:  # noqa: BLE001
+                log.exception("detector error: %s", e)
+                dets = []
+                time.sleep(0.5)
+            dt = time.perf_counter() - t0
+            if src is not self.source:  # source switched mid-inference
+                continue
+            self.counter.update(dets)
+            with self._lock:
+                self._dets = dets
+                self._dets_frame_shape = frame.shape[:2]
+                self._dets_ts = time.time()
+            self.stats.detect_ms = round(dt * 1000, 1)
+            n += 1
+            now = time.time()
+            if now - t_window >= 2.0:
+                self.stats.detect_fps = round(n / (now - t_window), 1)
+                captured = src.status()["frames"] - frames_at_window
+                self.stats.skip_ratio = round(captured / n, 1) if n else 0.0
+                frames_at_window = src.status()["frames"]
+                n, t_window = 0, now
+                # adaptive back-off: protect the overlay frame rate first
+                target = self.settings.target_fps
+                if self.stats.render_fps and self.stats.render_fps < 0.85 * min(target, src.fps_in or target):
+                    gap = min(1.0, gap + 0.02)
+                elif gap > 0:
+                    gap = max(0.0, gap - 0.02)
+                self.stats.detect_gap_ms = round(gap * 1000)
+            if self.detector.name == "none":
+                time.sleep(0.2)
+            elif gap:
+                self._stop.wait(gap)
+
+    def _render_loop(self) -> None:
+        last_id = -1
+        n, t_window = 0, time.time()
+        while not self._stop.is_set():
+            period = 1.0 / max(1.0, self.settings.target_fps)
+            t0 = time.time()
+            fid, frame, _ = self.source.latest()
+            if frame is None or fid == last_id:
+                time.sleep(0.01)
+                continue
+            last_id = fid
+            with self._lock:
+                dets = list(self._dets)
+                dshape = self._dets_frame_shape
+            out = annotate.resize_to_width(frame, self.settings.stream_width)
+            if dshape[0] and dshape[1]:
+                dets = annotate.scale_detections(dets, out.shape[1] / dshape[1], out.shape[0] / dshape[0])
+            out = out.copy() if out is frame else out
+            counts = summary.count_by_label(dets)
+            hud = [
+                f"FPV-VISION  {self.hud_mode}  {self.detector.backend.upper()}",
+                f"video {self.stats.render_fps:.0f}fps  det {self.stats.detect_fps:.1f}fps",
+            ]
+            if counts:
+                hud.append("  ".join(f"{k}:{v}" for k, v in sorted(counts.items())))
+            annotate.draw(out, dets, hud, recording=self.recorder.active)
+            jpeg = annotate.encode_jpeg(out, self.settings.jpeg_quality)
+            if self.recorder.active:
+                self.recorder.write(out)
+            with self._lock:
+                self._raw_frame = frame
+                self._annotated = out
+                self._jpeg = jpeg
+                self._jpeg_seq += 1
+            n += 1
+            now = time.time()
+            if now - t_window >= 2.0:
+                self.stats.render_fps = round(n / (now - t_window), 1)
+                n, t_window = 0, now
+            rest = period - (time.time() - t0)
+            if rest > 0:
+                time.sleep(rest)
+
+    # ------------------------------------------------------------ snapshots
+    def take_snapshot(self, note: str = "") -> dict | None:
+        raw, ann = self.latest_frames()
+        if raw is None or ann is None:
+            return None
+        dets, shape = self.current_detections()
+        snap_dir = self.settings.snapshots_dir
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%SZ", time.gmtime()) + f"_{int(time.time() * 1000) % 1000:03d}"
+        base = f"snap_{stamp}"
+        cv2.imwrite(str(snap_dir / f"{base}.jpg"), ann, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        cv2.imwrite(str(snap_dir / f"{base}_raw.jpg"), raw, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        meta = {
+            "name": base,
+            "ts": time.time(),
+            "image": f"{base}.jpg",
+            "raw_image": f"{base}_raw.jpg",
+            "source": self.source.spec.raw,
+            "detections": [d.to_dict() for d in dets],
+            "counts": summary.count_by_label(dets),
+            "local_summary": summary.describe(dets, shape[1] or raw.shape[1]),
+            "summary": None,
+            "summary_mode": None,
+            "note": note,
+        }
+        self.save_snapshot_meta(meta)
+        return meta
+
+    def save_snapshot_meta(self, meta: dict) -> None:
+        path = self.settings.snapshots_dir / f"{meta['name']}.json"
+        path.write_text(json.dumps(meta, indent=2))
+
+    def load_snapshot(self, name: str) -> dict | None:
+        if not name or "/" in name or ".." in name:
+            return None
+        path = self.settings.snapshots_dir / f"{name}.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text())
+
+    def list_snapshots(self, limit: int = 60) -> list[dict]:
+        d = self.settings.snapshots_dir
+        if not d.exists():
+            return []
+        items = []
+        for p in sorted(d.glob("snap_*.json"), reverse=True)[:limit]:
+            try:
+                items.append(json.loads(p.read_text()))
+            except (OSError, json.JSONDecodeError):
+                continue
+        return items
+
+    def list_clips(self) -> list[dict]:
+        d = self.settings.clips_dir
+        if not d.exists():
+            return []
+        active = self.recorder.path
+        return [
+            {"name": p.name, "bytes": p.stat().st_size, "ts": p.stat().st_mtime, "recording": p == active}
+            for p in sorted(d.glob("clip_*.mp4"), reverse=True)
+        ]

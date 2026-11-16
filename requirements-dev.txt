@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8
+httpx>=0.27
+onnx>=1.16           # only needed to export models
+onnxslim>=0.1.30

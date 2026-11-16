@@ -1,0 +1,11 @@
+# Runtime (Pi 5, Python 3.11, aarch64). torch comes in via ultralytics (CPU wheels).
+ultralytics>=8.4.0
+opencv-python-headless>=4.10
+numpy>=1.26
+lap>=0.5.12          # ByteTrack assignment; pre-install so tracking works offline
+ncnn>=1.0.20240410   # fastest CPU backend on the Pi
+onnxruntime>=1.18    # fallback backend
+fastapi>=0.110
+uvicorn[standard]>=0.29
+paho-mqtt>=2.0
+google-genai>=1.0    # optional cloud mode, only used when GEMINI_API_KEY is set
