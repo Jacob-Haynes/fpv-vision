@@ -552,8 +552,9 @@ Code layout (`fpv_vision/`):
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Code only. The sample clips are downloaded at runtime from
-Wikimedia Commons under their own terms (NASA public domain; CC0) and are not part of this
-repository. YOLO weights are downloaded from Ultralytics and are licensed separately by
-Ultralytics (AGPL-3.0 or an Ultralytics enterprise licence).
+Copyright (C) 2026 Jacob Haynes. Licensed under the GNU AGPL v3 (see LICENSE). Uses Ultralytics YOLO (AGPL-3.0); model weights are subject to Ultralytics' licence.
 
+The AGPL means that if you modify fpv-vision and let other people use it over a network
+(for example by hosting the web UI), you must offer them the source of your modified
+version. The sample clips are not part of this repository. They are downloaded at runtime
+from Wikimedia Commons under their own terms (NASA public domain; CC0).

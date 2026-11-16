@@ -2,7 +2,7 @@
 name = "fpv-vision"
 version = "0.1.0"
 description = "Live object detection and video analytics for drone/FPV and handheld footage (Apple Silicon / Raspberry Pi 5)"
-license = { text = "MIT" }
+license = "AGPL-3.0-only"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
