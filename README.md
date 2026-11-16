@@ -387,7 +387,7 @@ The Pi path is unchanged: YOLO26n NCNN on the CPU, as a pi-profiles unit.
 git clone https://github.com/Jacob-Haynes/fpv-vision && cd fpv-vision
 sudo bash deploy/install.sh        # idempotent, non-interactive, does NOT enable at boot
 sudo nano /etc/fpv-vision.env      # FPV_SOURCE, FPV_DEFAULT_POSITION, optional VLM_URL
-sudo pi-profiles fpv-vision        # or bft-fpv (with OpenTAKServer + mesh bridge)
+sudo pi-profiles fpv-vision        # combined profiles (e.g. with OpenTAKServer + mesh bridge) live in pi-profiles
 ```
 
 `install.sh` does the following:

@@ -73,7 +73,7 @@ install -m 644 "$APP_DIR/deploy/$APP.service" /etc/systemd/system/$APP.service
 systemctl daemon-reload
 if [ -d /opt/pi-profiles/profiles.d ]; then
     cp "$APP_DIR"/profiles.d/*.conf /opt/pi-profiles/profiles.d/
-    echo "    installed pi-profiles: fpv-vision, bft-fpv"
+    echo "    installed pi-profiles profile: fpv-vision"
 fi
 
 cat <<MSG
@@ -84,7 +84,6 @@ cat <<MSG
   web UI : http://<pi-ip>:8110
 
   sudo pi-profiles fpv-vision        # standalone
-  sudo pi-profiles bft-fpv           # with OpenTAKServer + mesh bridge
   sudo systemctl start $APP          # or start it by hand
   journalctl -u $APP -f
   sudo -u $APP $APP_DIR/.venv/bin/python -m fpv_vision --benchmark 100 --data-dir $DATA_DIR   # measure FPS
