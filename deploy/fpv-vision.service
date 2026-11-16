@@ -16,6 +16,8 @@ Environment=YOLO_CONFIG_DIR=/var/lib/fpv-vision/.ultralytics
 ExecStart=/opt/fpv-vision/deploy/start.sh
 Restart=on-failure
 RestartSec=5
+# pi-profiles waits for the cgroup to empty; we exit in ~3 s on SIGTERM
+TimeoutStopSec=15
 # Leave a core for the TAK server / mesh bridge when they share the Pi
 Nice=5
 

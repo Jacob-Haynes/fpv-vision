@@ -79,7 +79,41 @@ class NullDetector(Detector):
         return {"name": "none", "backend": "none", "reason": self.reason}
 
 
-def resolve_model(model: str, models_dir: Path) -> tuple[str, str]:
+def select_device(pref: str = "auto") -> str:
+    """auto -> CUDA > Apple MPS > CPU. Explicit values (cpu, mps, cuda, 0) are passed through."""
+    pref = (pref or "auto").strip().lower()
+    if pref != "auto":
+        return pref
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:  # noqa: BLE001 - torch missing/broken -> CPU
+        pass
+    return "cpu"
+
+
+def accelerator_of(device: str) -> str:
+    d = device.lower()
+    if d.startswith("cuda") or d.isdigit():
+        return "cuda"
+    return "mps" if d == "mps" else "cpu"
+
+
+def choose_model(settings, device: str) -> tuple[str, int]:
+    """Model + inference size: bigger model on a GPU, nano on CPU (the Pi)."""
+    gpu = accelerator_of(device) != "cpu"
+    model = settings.model
+    if model in ("", "auto"):
+        model = settings.gpu_model if gpu else settings.cpu_model
+    imgsz = settings.imgsz or (settings.gpu_imgsz if gpu else settings.cpu_imgsz)
+    return model, imgsz
+
+
+def resolve_model(model: str, models_dir: Path, prefer_pytorch: bool = False) -> tuple[str, str]:
     """Return (path_or_name, backend) for a model name like ``yolo26n``.
 
     Explicit paths are used as given. Otherwise look in ``models_dir`` for an exported
@@ -91,11 +125,11 @@ def resolve_model(model: str, models_dir: Path) -> tuple[str, str]:
             return str(p), "ncnn"
         return str(p), {".onnx": "onnx", ".pt": "pytorch"}.get(p.suffix, "unknown")
     stem = p.stem if p.suffix else model
-    for candidate, backend in (
-        (models_dir / f"{stem}_ncnn_model", "ncnn"),
-        (models_dir / f"{stem}.onnx", "onnx"),
-        (models_dir / f"{stem}.pt", "pytorch"),
-    ):
+    order = [(models_dir / f"{stem}_ncnn_model", "ncnn"), (models_dir / f"{stem}.onnx", "onnx"),
+             (models_dir / f"{stem}.pt", "pytorch")]
+    if prefer_pytorch:  # GPU (CUDA/MPS) runs the PyTorch weights; NCNN/ONNX here are CPU paths
+        order = order[2:]
+    for candidate, backend in order:
         if candidate.exists():
             return str(candidate), backend
     return str(models_dir / f"{stem}.pt"), "pytorch"
@@ -116,10 +150,12 @@ class YoloDetector(Detector):
     name = "yolo"
 
     def __init__(self, model: str, models_dir: Path, *, imgsz: int = 416, conf: float = 0.35,
-                 classes: list[int] | None = None, device: str = "cpu", tracker: str = "bytetrack.yaml"):
+                 classes: list[int] | None = None, device: str = "cpu", tracker: str = "bytetrack.yaml",
+                 infer_max_width: int = 0):
         from ultralytics import YOLO  # heavy import; keep it lazy
 
-        path, backend = resolve_model(model, models_dir)
+        self.accelerator = accelerator_of(device)
+        path, backend = resolve_model(model, models_dir, prefer_pytorch=self.accelerator != "cpu")
         if backend == "pytorch":
             path = ensure_weights(path)
         self.model_path, self.backend = path, backend
@@ -128,12 +164,22 @@ class YoloDetector(Detector):
         if backend in ("ncnn", "onnx") and size_file.exists():
             imgsz = int(size_file.read_text().strip() or imgsz)
         self.imgsz, self.conf, self.classes, self.device, self.tracker = imgsz, conf, classes, device, tracker
+        self.infer_max_width = infer_max_width
         self._model = YOLO(path, task="detect")
         self._lock = threading.Lock()
         self.names: dict[int, str] = dict(getattr(self._model, "names", None) or COCO_NAMES)
-        log.info("YOLO loaded: %s (%s) imgsz=%d", path, backend, imgsz)
+        log.info("YOLO loaded: %s (%s on %s) imgsz=%d", path, backend, device, imgsz)
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
+        # 4K/2.7K footage: downscale once here (cheap) rather than inside Ultralytics; boxes are
+        # mapped back to the original frame's coordinates.
+        scale = 1.0
+        h, w = frame.shape[:2]
+        if self.infer_max_width and w > self.infer_max_width:
+            import cv2
+
+            scale = w / self.infer_max_width
+            frame = cv2.resize(frame, (self.infer_max_width, int(h / scale)), interpolation=cv2.INTER_AREA)
         with self._lock:
             results = self._model.track(
                 frame, persist=True, tracker=self.tracker, imgsz=self.imgsz, conf=self.conf,
@@ -146,7 +192,7 @@ class YoloDetector(Detector):
         boxes = r.boxes
         if boxes is None or len(boxes) == 0:
             return out
-        xyxy = boxes.xyxy.cpu().numpy().astype(int)
+        xyxy = (boxes.xyxy.cpu().numpy() * scale).astype(int)
         cls = boxes.cls.cpu().numpy().astype(int)
         confs = boxes.conf.cpu().numpy()
         ids = boxes.id.cpu().numpy().astype(int) if boxes.id is not None else [None] * len(cls)
@@ -164,7 +210,7 @@ class YoloDetector(Detector):
 
     def info(self) -> dict:
         return {"name": "yolo", "backend": self.backend, "model": self.model_path, "imgsz": self.imgsz,
-                "conf": self.conf, "tracker": "ByteTrack"}
+                "conf": self.conf, "tracker": "ByteTrack", "device": self.device, "accelerator": self.accelerator}
 
 
 def build_detector(settings) -> Detector:
@@ -172,8 +218,10 @@ def build_detector(settings) -> Detector:
         return NullDetector("disabled in config")
     try:
         classes = None if settings.all_classes else ISR_CLASSES
-        return YoloDetector(settings.model, settings.models_dir, imgsz=settings.imgsz, conf=settings.conf,
-                            classes=classes, device=settings.device)
+        device = select_device(settings.device)
+        model, imgsz = choose_model(settings, device)
+        return YoloDetector(model, settings.models_dir, imgsz=imgsz, conf=settings.conf, classes=classes,
+                            device=device, infer_max_width=settings.infer_max_width)
     except Exception as e:  # noqa: BLE001 - offline with no weights must still stream
         log.error("detector unavailable, streaming without detection: %s", e)
         return NullDetector(f"model unavailable: {e}")

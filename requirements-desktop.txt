@@ -1,0 +1,7 @@
+# Laptop/desktop run path (macOS Apple Silicon primary; Linux/Windows x86_64 should work).
+# torch comes in via ultralytics: on macOS the PyPI wheel includes Apple MPS; on Linux it
+# includes CUDA; on Windows the default wheel is CPU-only (install a CUDA build from
+# pytorch.org first if you want the GPU there).
+-r requirements.txt
+mss>=9.0                                                  # screen capture source (phone mirroring)
+pyobjc-framework-AVFoundation>=10.0; sys_platform == "darwin"   # camera names + permission prompt

@@ -6,6 +6,7 @@ CLI flags in ``__main__`` override these.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,10 +55,15 @@ class Settings:
     sample_url: str = ""
 
     # --- detection ---
-    model: str = "yolo26n"  # name or path; *_ncnn_model dir / .onnx / .pt all work
-    imgsz: int = 416
+    model: str = "auto"  # auto = gpu_model on CUDA/MPS, cpu_model on CPU; or a name/path
+    gpu_model: str = "yolo26s"
+    cpu_model: str = "yolo26n"
+    imgsz: int = 0  # 0 = auto: gpu_imgsz / cpu_imgsz
+    gpu_imgsz: int = 640
+    cpu_imgsz: int = 416
+    infer_max_width: int = 1280  # downscale bigger frames (4K/2.7K) before inference
     conf: float = 0.30
-    device: str = "cpu"
+    device: str = "auto"  # auto = CUDA > Apple MPS > CPU
     all_classes: bool = False  # False = ISR-relevant subset (people, vehicles, boats, aircraft)
     target_fps: float = 20.0  # adaptive frame-skip aims to keep the overlay at least this smooth
     detector: str = "yolo"  # yolo | none (stream only)
@@ -68,6 +74,11 @@ class Settings:
     stream_width: int = 960
     jpeg_quality: int = 75
 
+    # --- replay / footage library ---
+    footage_dirs: str = "~/Movies/FPV"  # os.pathsep-separated dirs listed in the UI's footage picker
+    allow_screen: bool = sys.platform == "darwin"  # offer screen capture (phone mirroring) in the UI
+    request_camera: bool = True  # macOS: ask for camera permission at startup (main thread)
+
     # --- storage ---
     data_dir: Path = field(default_factory=_default_data_dir)
     max_clip_seconds: int = 300
@@ -77,6 +88,13 @@ class Settings:
     gemini_model: str = DEFAULT_GEMINI_MODEL
     gemini_min_interval: float = 10.0  # seconds between any two calls
     gemini_periodic_seconds: float = 0.0  # 0 = off; else auto-summary period (>= min interval)
+
+    # --- scene description backend (VLM) ---
+    vlm_backend: str = "auto"  # auto | openai_compat | gemini | off
+    vlm_url: str = ""  # bare base URL, e.g. http://isr-hq.local:11434 (Ollama)
+    vlm_model: str = "qwen3-vl:8b"
+    vlm_api_key: str = ""
+    vlm_min_interval: float = 3.0
 
     # --- ATAK / mesh ---
     tak_host: str = "127.0.0.1"
@@ -89,6 +107,9 @@ class Settings:
     mqtt_user: str = "guest"
     mqtt_pass: str = "guest"
     mesh_enabled: bool = True
+    mqtt_enabled: bool = True
+    public_host: str = ""  # short hostname for the heartbeat (default: this machine's)
+    public_url: str = ""  # full UI URL for the heartbeat (default http://<host>.local:<port>/)
 
     @property
     def gemini_enabled(self) -> bool:
@@ -118,7 +139,13 @@ class Settings:
         s.capture_height = _env_int("FPV_CAPTURE_HEIGHT", s.capture_height)
         s.sample_url = _env("FPV_SAMPLE_URL", s.sample_url)
         s.model = _env("FPV_MODEL", s.model)
+        s.gpu_model = _env("FPV_GPU_MODEL", s.gpu_model)
+        s.cpu_model = _env("FPV_CPU_MODEL", s.cpu_model)
         s.imgsz = _env_int("FPV_IMGSZ", s.imgsz)
+        s.gpu_imgsz = _env_int("FPV_GPU_IMGSZ", s.gpu_imgsz)
+        s.cpu_imgsz = _env_int("FPV_CPU_IMGSZ", s.cpu_imgsz)
+        s.infer_max_width = _env_int("FPV_INFER_MAX_WIDTH", s.infer_max_width)
+        s.device = _env("FPV_DEVICE", s.device)
         s.conf = _env_float("FPV_CONF", s.conf)
         s.all_classes = _env_bool("FPV_ALL_CLASSES", s.all_classes)
         s.target_fps = _env_float("FPV_TARGET_FPS", s.target_fps)
@@ -129,6 +156,9 @@ class Settings:
         s.jpeg_quality = _env_int("FPV_JPEG_QUALITY", s.jpeg_quality)
         if _env("FPV_DATA_DIR"):
             s.data_dir = Path(_env("FPV_DATA_DIR"))
+        s.footage_dirs = _env("FPV_FOOTAGE_DIRS", s.footage_dirs)
+        s.allow_screen = _env_bool("FPV_ALLOW_SCREEN", s.allow_screen)
+        s.request_camera = _env_bool("FPV_REQUEST_CAMERA", s.request_camera)
         s.max_clip_seconds = _env_int("FPV_MAX_CLIP_SECONDS", s.max_clip_seconds)
         s.gemini_api_key = _env("GEMINI_API_KEY")
         s.gemini_model = _env("GEMINI_MODEL", s.gemini_model) or DEFAULT_GEMINI_MODEL
@@ -144,4 +174,12 @@ class Settings:
         s.mqtt_user = _env("MQTT_USER", s.mqtt_user)
         s.mqtt_pass = _env("MQTT_PASS", s.mqtt_pass)
         s.mesh_enabled = _env_bool("MESH_ENABLED", s.mesh_enabled)
+        s.mqtt_enabled = _env_bool("MQTT_ENABLED", s.mqtt_enabled)
+        s.public_host = _env("FPV_PUBLIC_HOST", s.public_host)
+        s.public_url = _env("FPV_PUBLIC_URL", s.public_url)
+        s.vlm_backend = _env("VLM_BACKEND", s.vlm_backend)
+        s.vlm_url = _env("VLM_URL", s.vlm_url)
+        s.vlm_model = _env("VLM_MODEL", s.vlm_model) or "qwen3-vl:8b"
+        s.vlm_api_key = _env("VLM_API_KEY", s.vlm_api_key)
+        s.vlm_min_interval = _env_float("VLM_MIN_INTERVAL", s.vlm_min_interval)
         return s

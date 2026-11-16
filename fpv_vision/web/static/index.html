@@ -6,7 +6,7 @@
 <title>FPV Vision</title>
 <style>
   :root { --bg:#0d1110; --panel:#161c1a; --line:#27312d; --text:#e4ece8; --dim:#8c9a94;
-          --accent:#7fd18b; --warn:#f0b44c; --bad:#ef6a5e; --person:#eb2828; --vehicle:#ffa500; --cloud:#6fb4ff; }
+          --accent:#7fd18b; --warn:#f0b44c; --bad:#ef6a5e; --person:#eb2828; --vehicle:#ffa500; --cloud:#6fb4ff; --vlm:#c79bff; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif; }
   header { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 16px; border-bottom:1px solid var(--line); }
@@ -14,19 +14,25 @@
   .pill { padding:3px 9px; border-radius:999px; font-size:12px; border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
   .pill.ok { color:var(--accent); border-color:#2f5a36; } .pill.bad { color:var(--bad); border-color:#5a2f2f; }
   .pill.cloud { color:var(--cloud); border-color:#2d4a6a; } .pill.warn { color:var(--warn); border-color:#5a4a2f; }
-  main { display:grid; grid-template-columns: minmax(0,1fr) 360px; gap:14px; padding:14px 16px; }
-  @media (max-width: 980px) { main { grid-template-columns: minmax(0,1fr); } }
+  .pill.vlm { color:var(--vlm); border-color:#4a3a6a; }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 380px; gap:14px; padding:14px 16px; }
+  @media (max-width: 1080px) { main { grid-template-columns: minmax(0,1fr); } }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:14px; }
   .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--dim); margin:0 0 10px; }
+  .vwrap { position:relative; }
   #video { width:100%; display:block; border-radius:8px; background:#000; aspect-ratio:16/9; object-fit:contain; }
+  #cropBox { position:absolute; border:2px dashed var(--warn); background:rgba(240,180,76,.12); display:none; pointer-events:none; }
+  .vwrap.cropping { cursor:crosshair; }
   .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   button { background:#22302b; color:var(--text); border:1px solid #33443d; border-radius:8px; padding:9px 14px; font:inherit; cursor:pointer; min-height:40px; }
   button:hover { border-color:var(--accent); } button:disabled { opacity:.5; cursor:default; }
   button.primary { background:#2c5a37; border-color:#3e7a4b; } button.rec { background:#5a2323; border-color:#7a3333; }
+  button.sm { min-height:32px; padding:5px 10px; font-size:13px; }
   input, select { background:#0f1513; color:var(--text); border:1px solid #33443d; border-radius:8px; padding:8px 10px; font:inherit; min-height:40px; }
-  input[type=checkbox] { min-height:auto; }
+  input[type=checkbox] { min-height:auto; } input[type=range] { padding:0; min-height:28px; }
   .grow { flex:1 1 160px; min-width:0; }
-  .stats { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:8px; margin-top:10px; }
+  .stats { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:8px; margin-top:10px; }
+  @media (max-width: 560px) { .stats { grid-template-columns: repeat(3, minmax(0,1fr)); } }
   .stat { background:#0f1513; border:1px solid var(--line); border-radius:8px; padding:8px; }
   .stat b { display:block; font-size:18px; font-variant-numeric: tabular-nums; } .stat span { color:var(--dim); font-size:12px; }
   table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; }
@@ -34,7 +40,7 @@
   td.n { text-align:right; }
   .dot { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:middle; background:#28c8dc; }
   .summary { background:#0f1513; border-left:3px solid var(--accent); padding:8px 10px; border-radius:4px; min-height:40px; }
-  .summary.gemini { border-left-color:var(--cloud); }
+  .summary.gemini { border-left-color:var(--cloud); } .summary.openai_compat { border-left-color:var(--vlm); }
   .small { font-size:12px; color:var(--dim); }
   .gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap:10px; }
   .snap { background:#0f1513; border:1px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; }
@@ -46,14 +52,22 @@
   .msg.err { color:var(--bad); } .msg.ok { color:var(--accent); }
   ul.plain { list-style:none; padding:0; margin:0; } ul.plain li { padding:4px 0; border-bottom:1px solid var(--line); font-size:13px; }
   a { color:var(--cloud); }
+  #replayBar { display:none; margin-top:10px; background:#0f1513; border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  #replayBar .badge { font-size:11px; letter-spacing:.1em; color:#f0b44c; border:1px solid #6a5530; border-radius:4px; padding:1px 6px; }
+  #scrub { width:100%; }
+  .footage { max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+  .footage label { display:flex; gap:8px; align-items:center; margin:0; padding:5px 8px; border-bottom:1px solid var(--line); color:var(--text); font-size:13px; cursor:pointer; }
+  .footage label span.small { margin-left:auto; }
+  #timeline { width:100%; height:90px; display:block; background:#0f1513; border:1px solid var(--line); border-radius:6px; cursor:pointer; }
+  progress { width:100%; height:10px; }
 </style>
 </head>
 <body>
 <header>
   <h1>FPV VISION</h1>
-  <span id="modePill" class="pill">mode</span>
-  <span id="detPill" class="pill">detector</span>
   <span id="srcPill" class="pill">source</span>
+  <span id="detPill" class="pill">detector</span>
+  <span id="scenePill" class="pill">scene</span>
   <span id="takPill" class="pill">TAK</span>
   <span id="meshPill" class="pill">mesh</span>
   <span class="small" style="margin-left:auto">ISR training demo · detections are image-space only, not geolocated</span>
@@ -61,13 +75,30 @@
 <main>
   <section>
     <div class="panel">
-      <img id="video" src="/stream.mjpg" alt="annotated video stream">
+      <div class="vwrap" id="vwrap">
+        <img id="video" src="/stream.mjpg" alt="annotated video stream" draggable="false">
+        <div id="cropBox"></div>
+      </div>
+      <div id="replayBar">
+        <div class="row">
+          <span class="badge">REPLAY</span>
+          <button class="sm" id="rpPrev" title="previous file">⏮</button>
+          <button class="sm" id="rpPlay">⏸</button>
+          <button class="sm" id="rpNext" title="next file">⏭</button>
+          <span id="rpFile" class="small grow"></span>
+          <span id="rpTime" class="small"></span>
+        </div>
+        <input type="range" id="scrub" min="0" max="100" step="0.1" value="0">
+        <div class="small" id="rpInfo"></div>
+      </div>
       <div class="stats">
         <div class="stat"><b id="sVideo">–</b><span>video fps</span></div>
         <div class="stat"><b id="sDet">–</b><span>detect fps</span></div>
         <div class="stat"><b id="sMs">–</b><span>ms / inference</span></div>
+        <div class="stat"><b id="sLat">–</b><span>latency ms</span></div>
         <div class="stat"><b id="sSkip">–</b><span>frames / detection</span></div>
       </div>
+      <div class="small" id="latInfo" style="margin-top:6px"></div>
       <div class="row" style="margin-top:12px">
         <button id="btnSnap">📷 Snapshot</button>
         <button id="btnDescribe" class="primary">Describe scene</button>
@@ -84,13 +115,34 @@
       <div class="row" style="margin-top:10px">
         <span class="small">Live (local):</span><span id="liveSummary" class="small"></span>
       </div>
-      <div class="row" style="margin-top:10px" id="periodicRow">
-        <label style="margin:0">Auto Gemini summary</label>
+      <div class="row" style="margin-top:10px">
+        <label style="margin:0">Auto scene summary</label>
         <select id="periodic">
-          <option value="0">off</option><option value="15">every 15 s</option>
+          <option value="0">off</option><option value="10">every 10 s</option><option value="15">every 15 s</option>
           <option value="30">every 30 s</option><option value="60">every 60 s</option><option value="120">every 2 min</option>
         </select>
         <span class="small" id="periodicNote"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Post-flight analysis</h2>
+      <div class="small">Pick footage (tick files in the Footage list, or type a file/folder path such as the mounted SD card) and analyse the whole recording as fast as this machine allows.</div>
+      <div class="row" style="margin-top:8px">
+        <input id="anTarget" class="grow" placeholder="/Volumes/SD/DCIM/DJI_001   (empty = ticked footage)">
+        <select id="anFps" title="frames analysed per second of video">
+          <option value="2">2 fps (fastest)</option><option value="5" selected>5 fps</option><option value="10">10 fps</option>
+        </select>
+        <button id="btnAnalyse" class="primary">Analyse</button>
+        <button id="btnAnCancel" class="sm" style="display:none">Cancel</button>
+      </div>
+      <div id="anBox" style="display:none; margin-top:10px">
+        <progress id="anProg" max="1" value="0"></progress>
+        <div class="small" id="anInfo"></div>
+        <canvas id="timeline" width="1200" height="90" style="margin-top:8px"></canvas>
+        <div class="small">Timeline: people (red) / vehicles (orange) in view per second. Click to replay from there.</div>
+        <h2 style="margin-top:10px">Best frames</h2>
+        <div class="gallery" id="anBest"></div>
       </div>
     </div>
 
@@ -102,13 +154,27 @@
 
   <aside>
     <div class="panel">
-      <h2>Video source</h2>
+      <h2>Footage (replay as live)</h2>
+      <div class="footage" id="footage"><div class="small" style="padding:8px">loading…</div></div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnReplay" class="primary">▶ Replay ticked (loop)</button>
+        <button id="btnFootRefresh" class="sm">↻</button>
+      </div>
+      <div class="small" id="footDirs" style="margin-top:6px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Live source</h2>
       <div class="row">
         <select id="srcSelect" class="grow"></select>
         <button id="btnSrc">Switch</button>
       </div>
-      <label>Or enter a source (rtsp://…, uvc:/dev/video0, file:/path.mp4, gopro-usb)</label>
-      <div class="row"><input id="srcCustom" class="grow" placeholder="rtsp://192.168.1.10:8554/live"><button id="btnSrcCustom">Use</button></div>
+      <label>Or enter a source (replay:/path.mp4|/dir, camera:iPhone, screen:1, rtsp://…, uvc:0)</label>
+      <div class="row"><input id="srcCustom" class="grow" placeholder="rtmp://localhost/live/drone"><button id="btnSrcCustom">Use</button></div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnCrop" class="sm">✂ Crop (drag on video)</button>
+        <button id="btnCropClear" class="sm">Clear crop</button>
+      </div>
       <div class="msg small" id="srcInfo"></div>
     </div>
 
@@ -151,10 +217,13 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-let selectedSnap = null, lastStatus = null, galleryKey = "", clipsKey = "";
+let selectedSnap = null, lastStatus = null, galleryKey = "", clipsKey = "", scrubbing = false;
+let cropMode = false, cropStart = null, jobId = null, jobTimer = null, lastJob = null;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ago = (ts) => { const s = Math.round(Date.now()/1000 - ts); return s < 60 ? `${s}s ago` : `${Math.round(s/60)} min ago`; };
+const mmss = (t) => `${String(Math.floor(t/60)).padStart(2,"0")}:${String(Math.floor(t%60)).padStart(2,"0")}`;
 const CAT = { person:"var(--person)", bicycle:"var(--vehicle)", car:"var(--vehicle)", motorcycle:"var(--vehicle)", bus:"var(--vehicle)", train:"var(--vehicle)", truck:"var(--vehicle)" };
+const SCENE = { openai_compat:"VLM (local, offline)", gemini:"Gemini (cloud)", local:"Local detector summary (offline)", off:"Local detector summary (offline)" };
 
 async function api(path, body) {
   const opts = body === undefined ? {} : { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) };
@@ -168,17 +237,37 @@ function pill(el, text, cls) { el.textContent = text; el.className = "pill " + (
 
 function renderStatus(s) {
   lastStatus = s;
-  pill($("modePill"), s.mode === "local" ? "LOCAL ONLY (offline)" : `LOCAL + GEMINI (${s.gemini.model})`, s.mode === "local" ? "ok" : "cloud");
-  const d = s.detector;
-  pill($("detPill"), d.name === "none" ? `no detector: ${d.reason || ""}` : `${(d.model||"").split("/").pop()} · ${d.backend} · ByteTrack`, d.name === "none" ? "bad" : "ok");
-  pill($("srcPill"), `${s.source.kind}: ${s.source.connected ? `${s.source.width}×${s.source.height}` : (s.source.error || "connecting…")}`, s.source.connected ? "ok" : "warn");
+  const src = s.source, d = s.detector, v = s.vlm;
+  const kindLabel = { replay:"REPLAY", simulate:"SIMULATED", screen:"SCREEN MIRROR" }[src.kind] || "LIVE";
+  pill($("srcPill"), `${kindLabel} · ${src.connected ? `${src.width}×${src.height} @ ${src.fps_in}fps` : (src.error || "connecting…")}`,
+       src.connected ? (src.kind === "replay" || src.kind === "simulate" ? "warn" : "ok") : "bad");
+  pill($("detPill"), d.name === "none" ? `no detector: ${d.reason || ""}` : `${(d.model||"").split("/").pop()} · ${d.backend}/${d.device} · ByteTrack`, d.name === "none" ? "bad" : "ok");
+  const active = v.active;
+  pill($("scenePill"), active === "openai_compat" ? `scene: VLM ${v.model}` : active === "gemini" ? `scene: Gemini ${v.model} (cloud)` :
+       (v.selected !== "off" ? `scene: local only (${v.selected} unreachable)` : "scene: local only (offline)"),
+       active === "openai_compat" ? "vlm" : active === "gemini" ? "cloud" : (v.selected !== "off" ? "warn" : "ok"));
   pill($("takPill"), `TAK ${s.tak.enabled ? (s.tak.connected ? "connected" : "offline") : "disabled"}${s.tak.queued ? ` (${s.tak.queued} queued)` : ""}`, s.tak.connected ? "ok" : (s.tak.enabled ? "warn" : ""));
-  pill($("meshPill"), `mesh ${s.mesh.enabled ? (s.mesh.connected ? "connected" : "offline") : "disabled"}`, s.mesh.connected ? "ok" : (s.mesh.enabled ? "warn" : ""));
+  pill($("meshPill"), `MQTT ${s.mesh.connected ? `connected · heartbeat ${s.mesh.heartbeats}` : "offline"}`, s.mesh.connected ? "ok" : "warn");
   $("sVideo").textContent = s.stats.render_fps || "–";
   $("sDet").textContent = s.stats.detect_fps || "–";
   $("sMs").textContent = s.stats.detect_ms || "–";
+  $("sLat").textContent = s.stats.latency_ms ? Math.round(s.stats.latency_ms) : "–";
   $("sSkip").textContent = s.stats.frames_per_detection || "–";
-  $("srcInfo").textContent = `Current: ${s.source.spec} → ${s.source.resolved || "?"} · in ${s.source.fps_in} fps` + (s.stats.detect_gap_ms ? ` · detector backing off ${s.stats.detect_gap_ms} ms` : "");
+  $("latInfo").textContent = `latency = frame decoded/captured → annotated JPEG (${Math.round(s.stats.pipeline_ms)} ms) + box age (${Math.round(s.stats.box_lag_ms)} ms); excludes capture device, network and browser.` +
+    (s.stats.detect_gap_ms ? ` Detector backing off ${s.stats.detect_gap_ms} ms.` : "");
+  $("srcInfo").textContent = `Current: ${src.spec} → ${src.resolved || "?"}` + (src.crop ? ` · cropped` : "") + (src.error ? ` · ${src.error}` : "") +
+    (["denied", "not_determined", "restricted"].includes(s.camera_permission) ? ` · macOS camera access: ${s.camera_permission} (System Settings › Privacy & Security › Camera)` : "");
+
+  // replay bar
+  const rp = src.replay_state;
+  $("replayBar").style.display = rp ? "block" : "none";
+  if (rp) {
+    $("rpFile").textContent = `${rp.file}  (${rp.index + 1}/${rp.files.length})`;
+    $("rpTime").textContent = `${mmss(rp.pos)} / ${mmss(rp.duration)}`;
+    $("rpPlay").textContent = rp.paused ? "▶" : "⏸";
+    $("rpInfo").textContent = `${rp.width}×${rp.height} @ ${rp.fps} fps source · paced to wall clock · ${rp.dropped} frames dropped to stay real-time`;
+    if (!scrubbing) { $("scrub").max = rp.duration || 1; $("scrub").value = rp.pos; }
+  }
 
   const labels = new Set([...Object.keys(s.counts), ...Object.keys(s.totals)]);
   $("counts").innerHTML = [...labels].sort().map(l => `<tr><td><span class="dot" style="background:${CAT[l]||"#28c8dc"}"></span>${esc(l)}</td><td class="n">${s.counts[l]||0}</td><td class="n">${s.totals[l]||0}</td></tr>`).join("")
@@ -187,13 +276,17 @@ function renderStatus(s) {
 
   if (s.last_summary) {
     $("summary").textContent = s.last_summary.text;
-    $("summary").className = "summary" + (s.last_summary.mode === "gemini" ? " gemini" : "");
-    $("summaryMeta").textContent = `${s.last_summary.mode === "gemini" ? "Gemini (cloud)" : "Local detector summary (offline)"} · ${ago(s.last_summary.ts)} · ${s.last_summary.snapshot}`;
+    $("summary").className = "summary " + (s.last_summary.mode || "");
+    $("summaryMeta").textContent = `${SCENE[s.last_summary.mode] || s.last_summary.mode}${s.last_summary.model ? " · " + s.last_summary.model : ""} · ${ago(s.last_summary.ts)} · ${s.last_summary.snapshot}`;
   }
-  $("btnDescribe").textContent = s.gemini.enabled ? (s.gemini.retry_in > 0 ? `Describe scene (wait ${Math.ceil(s.gemini.retry_in)}s)` : "Describe scene (Gemini)") : "Describe scene (local)";
-  $("periodic").disabled = !s.gemini.enabled;
-  $("periodicNote").textContent = s.gemini.enabled ? `min ${s.gemini.min_interval}s between calls; skipped when nothing is detected` : "needs GEMINI_API_KEY";
-  if (document.activeElement !== $("periodic")) $("periodic").value = String(Math.round(s.gemini.periodic_seconds)) in {0:1,15:1,30:1,60:1,120:1} ? String(Math.round(s.gemini.periodic_seconds)) : "0";
+  const backendName = active === "openai_compat" ? "VLM" : active === "gemini" ? "Gemini" : "local";
+  $("btnDescribe").textContent = v.retry_in > 0 && active !== "off" ? `Describe scene (wait ${Math.ceil(v.retry_in)}s)` : `Describe scene (${backendName})`;
+  $("periodic").disabled = !v.enabled;
+  $("periodicNote").textContent = v.enabled ? `chain: ${v.chain.join(" → ")}; skipped when nothing is detected` : "needs VLM_URL or GEMINI_API_KEY";
+  if (document.activeElement !== $("periodic")) {
+    const p = String(Math.round(v.periodic_seconds));
+    $("periodic").value = [...$("periodic").options].some(o => o.value === p) ? p : "0";
+  }
 
   const rec = s.recording;
   $("btnRec").textContent = rec.active ? "■ Stop recording" : "● Record";
@@ -201,25 +294,41 @@ function renderStatus(s) {
   $("recInfo").textContent = rec.active ? `${rec.file} · ${rec.seconds}s / max ${rec.max_seconds}s` : "";
   if (!$("pos").value && s.default_position) $("pos").value = s.default_position;
   const rx = s.mesh.rx || [];
-  $("meshRx").innerHTML = rx.length ? rx.map(m => `<li><b>${esc(m.from || "?")}</b> ${esc(m.text)} <span class="small">${ago(m.ts)}</span></li>`).join("") : `<li class="small">No messages</li>`;
+  $("meshRx").innerHTML = rx.length ? rx.map(m => `<li><b>${esc(m.from_short || m.from || "?")}</b> ${esc(m.text)} <span class="small">${ago(m.ts)}</span></li>`).join("") : `<li class="small">No messages</li>`;
+  if (!jobId && s.jobs && s.jobs.length) { const j = s.jobs[s.jobs.length - 1]; if (j.state === "running") watchJob(j.id); }
 }
 
-async function refreshGallery() {
-  const snaps = await api("/api/snapshots");
-  const key = snaps.map(s => s.name + (s.summary_mode||"") + (s.reports||[]).length).join(",");
-  if (key === galleryKey) return;
-  galleryKey = key;
-  $("gallery").innerHTML = snaps.map(s => `
-    <div class="snap ${s.name === selectedSnap ? "sel" : ""}" data-name="${esc(s.name)}">
+function snapCard(s, extra="") {
+  const mode = s.summary_mode === "gemini" ? '<span style="color:var(--cloud)">gemini</span>' : s.summary_mode === "openai_compat" ? '<span style="color:var(--vlm)">vlm</span>' : "";
+  const vt = s.video_file ? `<br><span class="small">${esc(s.video_file)} @ ${Number(s.video_time||0).toFixed(1)}s</span>` : "";
+  return `<div class="snap ${s.name === selectedSnap ? "sel" : ""}" data-name="${esc(s.name)}">
       <img loading="lazy" src="/media/snapshots/${encodeURIComponent(s.image)}" alt="">
-      <div><b>${new Date(s.ts*1000).toISOString().slice(11,19)}Z</b> ${s.summary_mode === "gemini" ? '<span style="color:var(--cloud)">gemini</span>' : ""}
-      ${(s.reports||[]).length ? '<span style="color:var(--accent)">· reported</span>' : ""}<br>${esc(s.summary || s.local_summary)}
-      <br><a href="/media/snapshots/${encodeURIComponent(s.raw_image)}" target="_blank" onclick="event.stopPropagation()">raw</a></div>
-    </div>`).join("") || `<div class="small">No snapshots yet</div>`;
-  document.querySelectorAll(".snap").forEach(el => el.onclick = () => {
+      <div><b>${new Date(s.ts*1000).toISOString().slice(11,19)}Z</b> ${mode}
+      ${(s.reports||[]).length ? '<span style="color:var(--accent)">· reported</span>' : ""}${vt}<br>${esc(s.summary || s.local_summary)}
+      <br><a href="/media/snapshots/${encodeURIComponent(s.raw_image)}" target="_blank" onclick="event.stopPropagation()">raw</a>
+      <a href="#" data-describe="${esc(s.name)}">describe</a>${extra}</div>
+    </div>`;
+}
+function bindSnapCards(root) {
+  root.querySelectorAll(".snap").forEach(el => el.onclick = (ev) => {
+    if (ev.target.dataset.describe) { ev.preventDefault(); describeSnap(ev.target.dataset.describe); return; }
     selectedSnap = selectedSnap === el.dataset.name ? null : el.dataset.name; galleryKey = ""; refreshGallery();
+    if (lastJob) renderJob(lastJob);
     $("selSnap").textContent = selectedSnap ? `Using snapshot ${selectedSnap} (tap again to clear)` : "Uses a fresh snapshot (none selected)";
   });
+}
+async function describeSnap(name) {
+  msg($("actionMsg"), "Describing snapshot…");
+  try { const r = await api(`/api/snapshots/${encodeURIComponent(name)}/describe`, {}); msg($("actionMsg"), r.warning || `${r.snapshot.summary_mode}: ${r.snapshot.summary}`, !r.warning); galleryKey = ""; refreshGallery(); }
+  catch (e) { msg($("actionMsg"), e.message, false); }
+}
+async function refreshGallery() {
+  const snaps = await api("/api/snapshots");
+  const key = snaps.map(s => s.name + (s.summary_mode||"") + (s.reports||[]).length + (s.summary||"").length).join(",") + selectedSnap;
+  if (key === galleryKey) return;
+  galleryKey = key;
+  $("gallery").innerHTML = snaps.map(s => snapCard(s)).join("") || `<div class="small">No snapshots yet</div>`;
+  bindSnapCards($("gallery"));
 }
 async function refreshClips() {
   const clips = await api("/api/clips");
@@ -231,15 +340,111 @@ async function loadSources() {
   const r = await api("/api/sources");
   $("srcSelect").innerHTML = r.sources.map(s => `<option value="${esc(s.spec)}" ${s.spec === r.current ? "selected" : ""}>${esc(s.label)}</option>`).join("");
 }
+async function loadFootage() {
+  const r = await api("/api/footage");
+  $("footDirs").textContent = r.dirs.length ? `Folders: ${r.dirs.join(", ")}` : "No footage folders found (set FPV_FOOTAGE_DIRS, or copy MP4s into data/footage)";
+  $("footage").innerHTML = r.files.map(f => `<label><input type="checkbox" value="${esc(f.path)}"> ${esc(f.name)}<span class="small">${(f.bytes/1e6).toFixed(0)} MB</span></label>`).join("")
+    || `<div class="small" style="padding:8px">No video files found</div>`;
+}
+const ticked = () => [...document.querySelectorAll("#footage input:checked")].map(i => i.value);
 async function switchSource(spec) {
-  try { await api("/api/source", { spec }); msg($("srcInfo"), `Switching to ${spec}…`); setTimeout(loadSources, 500); }
+  try { const r = await api("/api/source", { spec }); msg($("srcInfo"), `Switching to ${spec}…`); setTimeout(loadSources, 500); return r; }
   catch (e) { msg($("srcInfo"), e.message, false); }
 }
 
+// ---- crop (drag a rectangle on the video; coordinates normalised to the source frame)
+function imgRect() {
+  const img = $("video"), r = img.getBoundingClientRect();
+  const iw = img.naturalWidth || 16, ih = img.naturalHeight || 9;
+  const scale = Math.min(r.width / iw, r.height / ih), w = iw * scale, h = ih * scale;
+  return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, w, h };
+}
+$("btnCrop").onclick = () => { cropMode = !cropMode; $("vwrap").classList.toggle("cropping", cropMode); $("btnCrop").textContent = cropMode ? "Drag on the video…" : "✂ Crop (drag on video)"; };
+$("btnCropClear").onclick = () => api("/api/crop", { crop: null }).then(() => msg($("srcInfo"), "Crop cleared"));
+$("vwrap").addEventListener("pointerdown", (e) => { if (!cropMode) return; cropStart = [e.clientX, e.clientY]; $("cropBox").style.display = "block"; e.preventDefault(); });
+window.addEventListener("pointermove", (e) => {
+  if (!cropStart) return;
+  const wr = $("vwrap").getBoundingClientRect(), b = $("cropBox");
+  b.style.left = (Math.min(cropStart[0], e.clientX) - wr.left) + "px"; b.style.top = (Math.min(cropStart[1], e.clientY) - wr.top) + "px";
+  b.style.width = Math.abs(e.clientX - cropStart[0]) + "px"; b.style.height = Math.abs(e.clientY - cropStart[1]) + "px";
+});
+window.addEventListener("pointerup", async (e) => {
+  if (!cropStart) return;
+  const r = imgRect();
+  const x0 = (Math.min(cropStart[0], e.clientX) - r.left) / r.w, y0 = (Math.min(cropStart[1], e.clientY) - r.top) / r.h;
+  const w = Math.abs(e.clientX - cropStart[0]) / r.w, h = Math.abs(e.clientY - cropStart[1]) / r.h;
+  cropStart = null; $("cropBox").style.display = "none"; cropMode = false; $("vwrap").classList.remove("cropping"); $("btnCrop").textContent = "✂ Crop (drag on video)";
+  // the stream shows the *already cropped* frame: compose with any existing crop
+  const cur = lastStatus?.source?.crop;
+  let c = [Math.max(0, x0), Math.max(0, y0), Math.min(1, w), Math.min(1, h)];
+  if (cur) c = [cur[0] + c[0] * cur[2], cur[1] + c[1] * cur[3], c[2] * cur[2], c[3] * cur[3]];
+  try { await api("/api/crop", { crop: c }); msg($("srcInfo"), "Crop applied"); } catch (err) { msg($("srcInfo"), err.message, false); }
+});
+
+// ---- replay controls
+$("rpPlay").onclick = () => api("/api/replay", { action:"pause", value: !lastStatus?.source?.replay_state?.paused });
+$("rpNext").onclick = () => api("/api/replay", { action:"next" });
+$("rpPrev").onclick = () => api("/api/replay", { action:"prev" });
+$("scrub").addEventListener("input", () => { scrubbing = true; $("rpTime").textContent = `${mmss(Number($("scrub").value))} / ${mmss(Number($("scrub").max))}`; });
+$("scrub").addEventListener("change", async () => { await api("/api/replay", { action:"seek", value: Number($("scrub").value) }); scrubbing = false; });
+
+// ---- post-flight analysis
+function drawTimeline(tl, total) {
+  const c = $("timeline"), g = c.getContext("2d");
+  c.width = c.clientWidth * devicePixelRatio; c.height = 90 * devicePixelRatio;
+  g.clearRect(0, 0, c.width, c.height);
+  if (!tl.length) return;
+  const T = Math.max(total || 0, tl[tl.length - 1].t + 1), max = Math.max(1, ...tl.map(b => b.person + b.vehicle));
+  const bw = Math.max(1, c.width / T);
+  for (const b of tl) {
+    const x = b.t / T * c.width, hp = b.person / max * (c.height - 4), hv = b.vehicle / max * (c.height - 4);
+    g.fillStyle = "#eb2828"; g.fillRect(x, c.height - hp, bw, hp);
+    g.fillStyle = "#ffa500"; g.fillRect(x, c.height - hp - hv, bw, hv);
+  }
+  c.onclick = async (e) => {
+    const t = (e.offsetX / c.clientWidth) * T;
+    const b = tl.reduce((a, x) => Math.abs(x.t - t) < Math.abs(a.t - t) ? x : a, tl[0]);
+    const path = lastJob && (lastJob.paths || []).find(p => p.endsWith("/" + b.file) || p === b.file) || null;
+    if (path) { await switchSource("replay:" + path); setTimeout(() => api("/api/replay", { action:"seek", value: b.file_t }).catch(() => {}), 800); }
+  };
+}
+function renderJob(j) {
+  lastJob = j;
+  $("anBox").style.display = "block";
+  $("anProg").value = j.progress;
+  const eta = j.speed > 0 && j.state === "running" ? ` · ETA ${Math.round((j.total_s - j.processed_s) / j.speed)} s` : "";
+  $("anInfo").textContent = `${j.state.toUpperCase()} · ${j.files.join(", ")} · ${mmss(j.processed_s)} / ${mmss(j.total_s)} of video in ${j.elapsed_s}s (${j.speed}× real time)${eta}` +
+    (Object.keys(j.totals).length ? ` · unique: ${Object.entries(j.totals).map(([k,v]) => `${v} ${k}`).join(", ")}` : "") + (j.error ? ` · ${j.error}` : "");
+  if (j.timeline) drawTimeline(j.timeline, j.total_s);
+  $("anBest").innerHTML = (j.best || []).map(b => `<div class="snap ${b.name === selectedSnap ? "sel" : ""}" data-name="${esc(b.name)}"><img src="/media/snapshots/${encodeURIComponent(b.image)}" alt="">
+      <div><b>${esc(b.file)} @ ${b.t.toFixed(1)}s</b><br>${esc(b.summary)}<br><a href="#" data-describe="${esc(b.name)}">describe</a></div></div>`).join("")
+      || (j.state === "running" ? `<div class="small">best frames appear when the run finishes</div>` : `<div class="small">no detections</div>`);
+  bindSnapCards($("anBest"));
+  $("btnAnCancel").style.display = j.state === "running" ? "" : "none";
+  $("btnAnalyse").disabled = j.state === "running";
+}
+function watchJob(id) {
+  jobId = id; clearInterval(jobTimer);
+  jobTimer = setInterval(async () => {
+    try { const j = await api(`/api/analysis/${id}`); renderJob(j); if (j.state !== "running" && j.state !== "queued") { clearInterval(jobTimer); jobId = null; refreshGallery(); } }
+    catch (e) { clearInterval(jobTimer); jobId = null; }
+  }, 1000);
+}
+$("btnAnalyse").onclick = async () => {
+  const target = $("anTarget").value.trim() || ticked().join("|");
+  if (!target) { msg($("actionMsg"), "Tick footage or enter a path to analyse", false); return; }
+  try { const r = await api("/api/analysis", { target, sample_fps: Number($("anFps").value) }); renderJob(r.job); watchJob(r.job.id); }
+  catch (e) { msg($("actionMsg"), e.message, false); }
+};
+$("btnAnCancel").onclick = () => jobId && api(`/api/analysis/${jobId}/cancel`, {});
+
+// ---- buttons
+$("btnReplay").onclick = () => { const t = ticked(); if (!t.length) { msg($("srcInfo"), "Tick one or more files first", false); return; } switchSource("replay:" + t.join("|")); };
+$("btnFootRefresh").onclick = loadFootage;
 $("btnSnap").onclick = async () => { try { const s = await api("/api/snapshot", {}); msg($("actionMsg"), `Saved ${s.name}: ${s.local_summary}`); refreshGallery(); } catch (e) { msg($("actionMsg"), e.message, false); } };
 $("btnDescribe").onclick = async () => {
   $("btnDescribe").disabled = true; msg($("actionMsg"), "Describing…");
-  try { const r = await api("/api/describe", { mode:"auto" }); msg($("actionMsg"), r.warning || `${r.snapshot.summary_mode}: ${r.snapshot.summary}`, !r.warning); refreshGallery(); poll(); }
+  try { const r = await api("/api/describe", { mode:"auto" }); msg($("actionMsg"), r.warning || `${SCENE[r.snapshot.summary_mode] || r.snapshot.summary_mode}: ${r.snapshot.summary}`, !r.warning); refreshGallery(); poll(); }
   catch (e) { msg($("actionMsg"), e.message, false); }
   finally { $("btnDescribe").disabled = false; }
 };
@@ -260,12 +465,11 @@ $("btnSpot").onclick = async () => {
   } catch (e) { msg($("spotMsg"), e.message, false); }
   finally { $("btnSpot").disabled = false; }
 };
-// MJPEG reconnect if the stream drops
 $("video").onerror = () => setTimeout(() => { $("video").src = "/stream.mjpg?t=" + Date.now(); }, 1500);
 
-async function poll() { try { renderStatus(await api("/api/status")); } catch (e) { pill($("modePill"), "server unreachable", "bad"); } }
-poll(); loadSources(); refreshGallery(); refreshClips();
-setInterval(poll, 1000); setInterval(refreshGallery, 4000); setInterval(refreshClips, 4000);
+async function poll() { try { renderStatus(await api("/api/status")); } catch (e) { pill($("srcPill"), "server unreachable", "bad"); } }
+poll(); loadSources(); loadFootage(); refreshGallery(); refreshClips();
+setInterval(poll, 1000); setInterval(refreshGallery, 4000); setInterval(refreshClips, 5000);
 </script>
 </body>
 </html>

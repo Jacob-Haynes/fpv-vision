@@ -69,6 +69,67 @@ def create_app(service) -> FastAPI:
             raise HTTPException(400, "spec required")
         return await run_in_threadpool(service.switch_source, spec)
 
+    @app.get("/api/cameras")
+    async def cameras():
+        from fpv_vision.sources import list_cameras
+
+        return await run_in_threadpool(list_cameras)
+
+    @app.get("/api/footage")
+    async def footage():
+        return {"dirs": [str(d) for d in service.footage_dirs()], "files": await run_in_threadpool(service.list_footage)}
+
+    @app.post("/api/replay")
+    async def replay(body: dict = Body(...)):
+        res = service.replay_control(str(body.get("action", "")), body.get("value"))
+        if not res.get("ok"):
+            raise HTTPException(400, res.get("error"))
+        return res
+
+    @app.post("/api/crop")
+    async def crop(body: dict = Body(default={})):
+        c = body.get("crop")
+        if c is not None and (not isinstance(c, list) or len(c) != 4):
+            raise HTTPException(400, "crop must be [x, y, w, h] normalised 0-1, or null")
+        try:
+            return service.set_crop([float(v) for v in c] if c else None)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "crop values must be numbers")
+
+    @app.post("/api/analysis")
+    async def analysis_start(body: dict = Body(...)):
+        target = str(body.get("target", "")).strip()
+        try:
+            fps = float(body.get("sample_fps", 5))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "sample_fps must be a number")
+        res = await run_in_threadpool(service.start_analysis, target, fps)
+        if not res.get("ok"):
+            raise HTTPException(400, res.get("error"))
+        return res
+
+    @app.get("/api/analysis/{job_id}")
+    async def analysis_get(job_id: str):
+        job = service.jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404)
+        return job.to_dict()
+
+    @app.post("/api/analysis/{job_id}/cancel")
+    async def analysis_cancel(job_id: str):
+        job = service.jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404)
+        job.cancel()
+        return {"ok": True}
+
+    @app.post("/api/snapshots/{name}/describe")
+    async def describe_snapshot(name: str):
+        res = await run_in_threadpool(service.describe_snapshot, name)
+        if not res.get("ok"):
+            raise HTTPException(404, res.get("error"))
+        return res
+
     @app.post("/api/counts/reset")
     async def reset_counts():
         service.pipeline.counter.reset()
@@ -92,8 +153,8 @@ def create_app(service) -> FastAPI:
     @app.post("/api/describe")
     async def describe(body: dict = Body(default={})):
         mode = str(body.get("mode", "auto"))
-        if mode not in ("auto", "local", "gemini"):
-            raise HTTPException(400, "mode must be auto|local|gemini")
+        if mode not in ("auto", "local", "gemini", "vlm"):
+            raise HTTPException(400, "mode must be auto|local|vlm|gemini")
         return await run_in_threadpool(service.describe, mode)
 
     @app.post("/api/periodic")
@@ -102,7 +163,7 @@ def create_app(service) -> FastAPI:
             seconds = float(body.get("seconds", 0))
         except (TypeError, ValueError):
             raise HTTPException(400, "seconds must be a number")
-        return {"periodic_seconds": service.set_periodic(seconds), "gemini": service.gemini.enabled}
+        return {"periodic_seconds": service.set_periodic(seconds), "enabled": service.describer.enabled}
 
     @app.post("/api/record/start")
     async def record_start():

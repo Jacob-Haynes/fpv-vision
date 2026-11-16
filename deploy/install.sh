@@ -26,8 +26,14 @@ usermod -a -G video "$APP"
 
 echo "[3/7] copy code to $APP_DIR"
 mkdir -p "$APP_DIR"
-rsync -a --delete --exclude .venv --exclude .git --exclude data --exclude __pycache__ \
-    "$SRC_DIR/fpv_vision" "$SRC_DIR/deploy" "$SRC_DIR/profiles.d" "$SRC_DIR/requirements.txt" "$APP_DIR/"
+if [ "$(cd "$SRC_DIR" && pwd -P)" != "$(cd "$APP_DIR" && pwd -P)" ]; then
+    for d in fpv_vision deploy profiles.d scripts; do
+        [ -e "$SRC_DIR/$d" ] && rsync -a --delete --exclude __pycache__ "$SRC_DIR/$d/" "$APP_DIR/$d/"
+    done
+    install -m 644 "$SRC_DIR/requirements.txt" "$APP_DIR/requirements.txt"
+else
+    echo "    running from $APP_DIR itself; nothing to copy"
+fi
 chmod +x "$APP_DIR/deploy/start.sh"
 
 echo "[4/7] python venv + deps (first run downloads torch; takes a while)"
@@ -49,8 +55,10 @@ fi
 echo "[6/7] model export + sample clip (needs internet once; skipped if already present)"
 # read just the keys we need (the env file is systemd syntax, not safe to `source`)
 env_get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"' || true; }
-MODEL="$(env_get FPV_MODEL)"; MODEL="${MODEL:-yolo26n}"
-IMGSZ="$(env_get FPV_IMGSZ)"; IMGSZ="${IMGSZ:-416}"
+MODEL="$(env_get FPV_MODEL)"
+case "$MODEL" in ""|auto) MODEL="$(env_get FPV_CPU_MODEL)"; MODEL="${MODEL:-yolo26n}";; esac
+IMGSZ="$(env_get FPV_IMGSZ)"
+case "$IMGSZ" in ""|0) IMGSZ="$(env_get FPV_CPU_IMGSZ)"; IMGSZ="${IMGSZ:-416}";; esac
 cd "$APP_DIR"
 export YOLO_CONFIG_DIR="$DATA_DIR/.ultralytics"
 "$APP_DIR/.venv/bin/python" -m fpv_vision.export --model "$MODEL" --format ncnn --imgsz "$IMGSZ" --data-dir "$DATA_DIR" \

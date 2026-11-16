@@ -10,6 +10,7 @@ from fpv_vision.gemini import GeminiDescriber, RateLimited
 from fpv_vision.mesh import MeshBus
 from fpv_vision.pipeline import Pipeline, TrackCounter
 from fpv_vision.service import Service
+from fpv_vision.vlm import SceneDescriber
 from fpv_vision.web.app import create_app
 
 from conftest import FakeDetector, wait_for
@@ -22,7 +23,11 @@ def test_parse_spec():
     assert sources.parse_spec("rtsp://10.0.0.5:8554/live").kind == "network"
     assert sources.parse_spec("rtmp://x/live").kind == "network"
     assert sources.parse_spec("file:/tmp/a.mp4").target == "/tmp/a.mp4"
-    assert sources.parse_spec("clip.mp4").kind == "file"
+    assert sources.parse_spec("file:/tmp/a.mp4").kind == "replay"
+    assert sources.parse_spec("clip.mp4").kind == "replay"
+    assert sources.parse_spec("replay:/a.mp4|/b").target == "/a.mp4|/b"
+    assert sources.parse_spec("camera:iPhone").kind == "camera"
+    assert sources.parse_spec("screen").target == "1" and sources.parse_spec("screen:2").target == "2"
     assert sources.parse_spec("gopro-usb").kind == "gopro-usb"
     assert sources.parse_spec("gopro-usb:172.21.153.51").target == "172.21.153.51"
     s = sources.parse_spec("simulate:aerial")
@@ -113,7 +118,8 @@ def app_client(settings):
     gemini = GeminiDescriber("", settings.gemini_model)
     tak = CotSender(enabled=False).start()
     mesh = MeshBus(enabled=False).start()
-    service = Service(settings, pipeline, gemini, tak, mesh).start()
+    service = Service(settings, pipeline, SceneDescriber("auto", None, gemini), tak, mesh,
+                      detector_factory=FakeDetector).start()
     client = TestClient(create_app(service))
     assert wait_for(lambda: pipeline.latest_jpeg()[1] and pipeline.current_detections()[0])
     yield client, service
@@ -125,7 +131,8 @@ def test_status_and_counts(app_client):
     client, service = app_client
     assert wait_for(lambda: client.get("/api/status").json()["totals"].get("person") == 2)
     s = client.get("/api/status").json()
-    assert s["mode"] == "local"
+    assert s["mode"] == "simulate" and s["scene_backend"] == "off"
+    assert s["heartbeat"]["tool"] == "fpv-vision" and s["heartbeat"]["status"] in ("ok", "degraded")
     assert s["counts"] == {"person": 2, "car": 1, "truck": 1}
     assert s["source"]["connected"]
     assert s["live_summary"].startswith("2 people near a car")
@@ -145,7 +152,7 @@ def test_describe_local_and_gallery(app_client):
     assert r["ok"] and r["snapshot"]["summary_mode"] == "local"
     assert "people near a car" in r["snapshot"]["summary"]
     r2 = client.post("/api/describe", json={"mode": "gemini"}).json()
-    assert "not configured" in r2["warning"]
+    assert "No scene model configured" in r2["warning"]
     snaps = client.get("/api/snapshots").json()
     assert len(snaps) == 2
     img = client.get(f"/media/snapshots/{snaps[0]['image']}")

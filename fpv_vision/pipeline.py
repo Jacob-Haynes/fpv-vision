@@ -73,7 +73,15 @@ class PipelineStats:
     detect_ms: float = 0.0
     detect_gap_ms: float = 0.0
     skip_ratio: float = 0.0  # captured frames per detection
+    # latency (ms, exponential moving averages)
+    pipeline_ms: float = 0.0  # frame captured/decoded -> annotated JPEG ready to serve
+    box_lag_ms: float = 0.0  # age of the boxes drawn on a frame relative to that frame
+    encode_ms: float = 0.0
     extra: dict = field(default_factory=dict)
+
+
+def _ema(old: float, new: float, a: float = 0.15) -> float:
+    return round(new if not old else old + a * (new - old), 1)
 
 
 class Recorder:
@@ -204,7 +212,7 @@ class Pipeline:
         n, t_window, frames_at_window = 0, time.time(), 0
         while not self._stop.is_set():
             src = self.source
-            fid, frame, _ = src.latest()
+            fid, frame, fts = src.latest()
             if frame is None or fid == last_id:
                 time.sleep(0.005)
                 continue
@@ -223,7 +231,7 @@ class Pipeline:
             with self._lock:
                 self._dets = dets
                 self._dets_frame_shape = frame.shape[:2]
-                self._dets_ts = time.time()
+                self._dets_ts = fts  # capture time of the frame these boxes belong to
             self.stats.detect_ms = round(dt * 1000, 1)
             n += 1
             now = time.time()
@@ -248,30 +256,44 @@ class Pipeline:
     def _render_loop(self) -> None:
         last_id = -1
         n, t_window = 0, time.time()
+        next_t = time.time()
         while not self._stop.is_set():
             period = 1.0 / max(1.0, self.settings.target_fps)
-            t0 = time.time()
-            fid, frame, _ = self.source.latest()
+            now = time.time()
+            if now < next_t:
+                time.sleep(next_t - now)
+            src = self.source
+            fid, frame, fts = src.latest()
             if frame is None or fid == last_id:
-                time.sleep(0.01)
+                time.sleep(0.005)
                 continue
             last_id = fid
             with self._lock:
                 dets = list(self._dets)
                 dshape = self._dets_frame_shape
+                dets_ts = self._dets_ts
             out = annotate.resize_to_width(frame, self.settings.stream_width)
             if dshape[0] and dshape[1]:
                 dets = annotate.scale_detections(dets, out.shape[1] / dshape[1], out.shape[0] / dshape[0])
             out = out.copy() if out is frame else out
             counts = summary.count_by_label(dets)
+            accel = getattr(self.detector, "accelerator", "cpu").upper()
             hud = [
-                f"FPV-VISION  {self.hud_mode}  {self.detector.backend.upper()}",
-                f"video {self.stats.render_fps:.0f}fps  det {self.stats.detect_fps:.1f}fps",
+                f"FPV-VISION  {self.hud_mode}  {self.detector.backend.upper()}/{accel}",
+                f"video {self.stats.render_fps:.0f}fps  det {self.stats.detect_fps:.1f}fps  "
+                f"lat {self.stats.pipeline_ms + self.stats.box_lag_ms:.0f}ms",
             ]
             if counts:
                 hud.append("  ".join(f"{k}:{v}" for k, v in sorted(counts.items())))
-            annotate.draw(out, dets, hud, recording=self.recorder.active)
+            annotate.draw(out, dets, hud, recording=self.recorder.active, badge=self._badge(src))
+            t_enc = time.time()
             jpeg = annotate.encode_jpeg(out, self.settings.jpeg_quality)
+            done = time.time()
+            self.stats.encode_ms = _ema(self.stats.encode_ms, (done - t_enc) * 1000)
+            if fts:
+                self.stats.pipeline_ms = _ema(self.stats.pipeline_ms, (done - fts) * 1000)
+            if dets_ts and fts and dets:
+                self.stats.box_lag_ms = _ema(self.stats.box_lag_ms, max(0.0, fts - dets_ts) * 1000)
             if self.recorder.active:
                 self.recorder.write(out)
             with self._lock:
@@ -284,9 +306,22 @@ class Pipeline:
             if now - t_window >= 2.0:
                 self.stats.render_fps = round(n / (now - t_window), 1)
                 n, t_window = 0, now
-            rest = period - (time.time() - t0)
-            if rest > 0:
-                time.sleep(rest)
+            # deadline-based pacing: hold target_fps without accumulating drift
+            next_t = max(next_t + period, time.time() - period)
+
+    @staticmethod
+    def _badge(src) -> str:
+        """Discreet but honest provenance label, drawn top-right on every frame."""
+        kind = src.spec.kind
+        if kind == "simulate" or src.resolved == "synthetic":
+            return "SIMULATED"
+        if kind == "replay":
+            r = src.replay
+            pos = int(r.get("pos", 0))
+            return f"REPLAY {r.get('file', '')[:28]} {pos // 60:02d}:{pos % 60:02d}"
+        if kind == "screen":
+            return "SCREEN MIRROR"
+        return "LIVE"
 
     # ------------------------------------------------------------ snapshots
     def take_snapshot(self, note: str = "") -> dict | None:
@@ -294,10 +329,22 @@ class Pipeline:
         if raw is None or ann is None:
             return None
         dets, shape = self.current_detections()
+        extra = {}
+        if self.source.is_replay:
+            extra = {"video_file": self.source.replay.get("file"), "video_time": round(self.source.replay.get("pos", 0), 1)}
+        return self.save_snapshot(raw, ann, dets, shape[1] or raw.shape[1], note=note,
+                                  source=self.source.spec.raw, extra=extra)
+
+    def save_snapshot(self, raw: np.ndarray, ann: np.ndarray, dets: list[Detection], frame_width: int, *,
+                      note: str = "", source: str = "", extra: dict | None = None, prefix: str = "snap") -> dict:
         snap_dir = self.settings.snapshots_dir
         snap_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%SZ", time.gmtime()) + f"_{int(time.time() * 1000) % 1000:03d}"
-        base = f"snap_{stamp}"
+        base = f"snap_{stamp}" if prefix == "snap" else f"snap_{prefix}_{stamp}"
+        n = 1
+        while (snap_dir / f"{base}.json").exists():
+            n += 1
+            base = f"{base.rsplit('-', 1)[0]}-{n}"
         cv2.imwrite(str(snap_dir / f"{base}.jpg"), ann, [cv2.IMWRITE_JPEG_QUALITY, 85])
         cv2.imwrite(str(snap_dir / f"{base}_raw.jpg"), raw, [cv2.IMWRITE_JPEG_QUALITY, 90])
         meta = {
@@ -305,13 +352,14 @@ class Pipeline:
             "ts": time.time(),
             "image": f"{base}.jpg",
             "raw_image": f"{base}_raw.jpg",
-            "source": self.source.spec.raw,
+            "source": source,
             "detections": [d.to_dict() for d in dets],
             "counts": summary.count_by_label(dets),
-            "local_summary": summary.describe(dets, shape[1] or raw.shape[1]),
+            "local_summary": summary.describe(dets, frame_width),
             "summary": None,
             "summary_mode": None,
             "note": note,
+            **(extra or {}),
         }
         self.save_snapshot_meta(meta)
         return meta

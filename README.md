@@ -1,406 +1,475 @@
 # fpv-vision
 
-Live AI object detection on a drone or handheld video feed. It is a drone-ISR training
-demo that runs on one Raspberry Pi 5 with **no AI accelerator**: YOLO runs on the CPU.
-Google Gemini is optional; when you configure it, it writes plain-language scene
-summaries.
+AI object detection on drone and handheld video, built as an ISR training demo. People and
+vehicles are boxed, tracked and counted. You can ask a vision-language model to describe the
+scene, and send a SALUTE spot report to ATAK and over the Meshtastic mesh.
 
-- **Video in:** a USB capture card (an analog FPV receiver, goggles HDMI-out, or GoPro HDMI-out), GoPro USB webcam mode, RTSP/RTMP/HTTP/UDP streams, video files, or `--simulate`.
-- **Detection:** Ultralytics **YOLO26n** exported to **NCNN**, with **ByteTrack** tracking. People are shown in red, vehicles in orange. Counts are of unique tracks, so one person walking through the frame counts once.
-- **Smooth overlay:** the detector always takes the newest frame and skips the rest. The video is annotated at full rate with the latest boxes. If the overlay frame rate drops, the detector backs off.
-- **Web UI on :8110** for a laptop or tablet. It shows the annotated MJPEG stream, live and unique counts, a snapshot gallery, clip recording, a scene summary, and spot reports.
-- **ATAK and mesh:** **Send spot report** posts a CoT marker at an *operator-entered* grid, with a SALUTE text and the summary in the remarks. It also sends a short SALUTE text over the mesh using `meshbus/tx`.
-- **Offline by default.** Every feature works with no internet. The header shows `LOCAL ONLY (offline)` or `LOCAL + GEMINI`.
+Supported machines:
 
-> **Scope:** this is a defensive ISR training demo for observation and reporting only. It never
+- **Apple Silicon Mac (primary).** The Drone-ops Mac (M4 Pro) runs YOLO26s on the GPU (MPS) in
+  real time, including on 4K DJI footage.
+- **Raspberry Pi 5.** The same tool runs YOLO26n on the Pi's CPU (NCNN) at a lower frame rate.
+  The Pi stays the hub: OpenTAKServer, MQTT/mesh bridge and the launcher.
+
+| mode | what it is | badge on video |
+|---|---|---|
+| **Replay as live** (headline) | Plays your real DJI O3/O4 MP4s through the detector at real-time speed, timed to the wall clock (frames are dropped rather than slowed if we fall behind). Supports playlists, looping, a scrub bar and pause. | `REPLAY <file> mm:ss` |
+| **Live camera** | Mac built-in camera, **iPhone through Continuity Camera**, or a USB capture card. Cameras are picked by name. | `LIVE` |
+| **Screen mirror** (best effort) | DJI Goggles N3 → phone (DJI Fly) → mirrored to the Mac → screen capture with a crop. | `SCREEN MIRROR` |
+| **Post-flight analysis** | Point it at an SD card or folder. It processes the whole recording as fast as possible and gives a timeline, unique counts and clickable best frames. | `REPLAY ANALYSIS` |
+| **Simulate** | Public-domain/CC0 sample clips, so it works with no hardware and no internet. | `SIMULATED` |
+
+The badge is always drawn on the video, and the header shows the same thing. Recorded footage
+is never presented as live.
+
+> **Scope:** defensive ISR training demo for observation and reporting only. Nothing here
 > controls, arms or steers a drone.
-
-> **Cloud mode privacy:** when `GEMINI_API_KEY` is set, **Describe scene** and the optional
-> auto-summary **upload snapshot JPEGs to Google**. Use only demo footage, never real
-> operational imagery.
+>
+> **Privacy:** scene description is **offline by default**. It uses a local VLM on the HQ Mac,
+> or the detector-only summary. If you set `GEMINI_API_KEY`, Gemini becomes a fallback and
+> **snapshot JPEGs are sent to Google**, so use demo footage only.
 
 ---
 
 ## Contents
 
-1. [Quick start on a Mac (simulate)](#quick-start-on-a-mac-simulate)
-2. [Install on the Pi](#install-on-the-pi)
-3. [Video sources and wiring](#video-sources-and-wiring)
-4. [Performance (FPS)](#performance-fps)
-5. [Detection, tracking and counting](#detection-tracking-and-counting)
-6. [Gemini mode](#gemini-mode)
-7. [Spot reports: ATAK and mesh](#spot-reports-atak-and-mesh)
-8. [Why detections are not geolocated](#why-detections-are-not-geolocated)
-9. [Demo script](#demo-script)
-10. [Configuration reference](#configuration-reference)
-11. [API](#api)
-12. [Development](#development)
+1. [Office demo quick start (Drone-ops Mac)](#office-demo-quick-start-drone-ops-mac)
+2. [Running on a laptop](#running-on-a-laptop)
+3. [Replay as live](#replay-as-live)
+4. [Live inputs: what DJI goggles can and can't do](#live-inputs-what-dji-goggles-can-and-cant-do)
+5. [Post-flight analysis](#post-flight-analysis)
+6. [Scene description: local VLM, Gemini, offline](#scene-description-local-vlm-gemini-offline)
+7. [Performance: measured](#performance-measured)
+8. [Spot reports: ATAK and mesh](#spot-reports-atak-and-mesh)
+9. [Heartbeat](#heartbeat)
+10. [Why detections are not geolocated](#why-detections-are-not-geolocated)
+11. [Demo script](#demo-script)
+12. [Raspberry Pi install](#raspberry-pi-install)
+13. [Detection, tracking and counting](#detection-tracking-and-counting)
+14. [Configuration reference](#configuration-reference)
+15. [API](#api)
+16. [Development](#development)
 
 ---
 
-## Quick start on a Mac (simulate)
+## Office demo quick start (Drone-ops Mac)
 
 ```bash
-git clone https://github.com/Jacob-Haynes/fpv-vision && cd fpv-vision
-uv venv -p 3.11 .venv && uv pip install -p .venv/bin/python -r requirements-dev.txt
-.venv/bin/python -m fpv_vision.export --data-dir data      # downloads yolo26n, exports to NCNN
-.venv/bin/python -m fpv_vision --simulate --data-dir data   # http://localhost:8110
+git clone https://github.com/Jacob-Haynes/fpv-vision ~/Repos/isr-kit/fpv-vision
+cd ~/Repos/isr-kit/fpv-vision
+mkdir -p ~/Movies/FPV && cp /Volumes/<card>/DCIM/*/*.MP4 ~/Movies/FPV/   # your O3/O4 footage
+scripts/run-laptop.sh --setup-only        # one-off: venv + torch/ultralytics (needs internet)
+scripts/run-laptop.sh                      # http://isr-droneops.local:8110
 ```
 
-The first `--simulate` run downloads a ~9 MB sample clip into `data/samples/`. If there is no
-internet, it shows a synthetic test pattern instead, so the UI still works but nothing is
-detected. Sample clips (you can switch between them in the UI):
+The first run downloads the YOLO26s weights (19 MB) and the sample clips into
+`~/Library/Application Support/isr-kit/fpv-vision`. After that **no internet is needed**.
+If `~/Movies/FPV` contains footage, the app starts replaying it, looped. Otherwise it plays the
+simulate clip.
 
-| spec | clip | licence |
-|---|---|---|
-| `simulate` (default) | Handheld, eye level: the Yonge & Dundas scramble crossing in Toronto. Many people, cars and bikes. [Commons page](https://commons.wikimedia.org/wiki/File:DiagonalCrosswalkYongeDundas.webm) | CC0 (Raysonho @ Open Grid Scheduler / Grid Engine) |
-| `simulate:aerial` | NASA drone pass over the Banana Creek stands at the Artemis II launch: buses, cars and crowds, from high up. [Commons page](https://commons.wikimedia.org/wiki/File:Artemis_II_Live_Launch_Coverage_-_Drone,_Crowd_Shots_of_Banana_Creek_(KSC-20260401-MH-AJN01-0001-Artemis_II_Launch_ISO_Drone_Crowd_Shot_Banana_Creek_4K).webm) | Public domain (NASA KSC) |
+## Running on a laptop
 
-The aerial clip is a useful teaching point. From that height a nano model at 416 px finds
-some of the vehicles but almost none of the people, because people are only a few pixels
-tall. See [Detection](#detection-tracking-and-counting).
+`scripts/run-laptop.sh` (macOS or Linux) does the following:
 
-## Install on the Pi
+- Creates `.venv` with `uv` if it is installed, otherwise with Python 3.10–3.13.
+- Installs `requirements-desktop.txt`, and reinstalls only when the requirements change.
+- Runs **in the foreground** until SIGTERM or Ctrl-C, then exits cleanly in about 3 s and
+  publishes heartbeat `stopped`.
+- Binds `0.0.0.0:8110`.
 
-On a Pi 5 running 64-bit Pi OS Bookworm (Python 3.11), with internet for the first install:
+It reads configuration **only from the environment**. The platform's `laptop/start-mac.sh`
+sources `~/.config/isr-kit/station.env` first (see `deploy/station.env.example`). Defaults it
+applies when a variable is unset:
 
-```bash
-git clone https://github.com/Jacob-Haynes/fpv-vision && cd fpv-vision
-sudo bash deploy/install.sh
-sudo nano /etc/fpv-vision.env           # FPV_SOURCE, FPV_DEFAULT_POSITION, optional GEMINI_API_KEY
-sudo pi-profiles fpv-vision             # or: sudo pi-profiles bft-fpv  (with OpenTAKServer + mesh bridge)
-```
-
-`install.sh` is idempotent and non-interactive. It does these things:
-
-- Installs apt packages: `python3-venv`, `v4l-utils`, `ffmpeg`, `libgl1`, `rsync`.
-- Creates the `fpv-vision` system user, in the `video` group.
-- Copies the code to `/opt/fpv-vision` and builds a venv in `/opt/fpv-vision/.venv`.
-- Creates `/var/lib/fpv-vision/{snapshots,clips,models,samples}`.
-- Copies `deploy/fpv-vision.env.example` to `/etc/fpv-vision.env` (mode 600) **only if that file doesn't exist yet**.
-- Exports the model to NCNN, downloads the sample clips, and installs the systemd unit and the `profiles.d/*.conf` files for pi-profiles.
-
-It **does not enable the service at boot**; pi-profiles starts and stops it.
-
-Pi profiles shipped in `profiles.d/`:
-
-| profile | units |
+| variable | Mac default |
 |---|---|
-| `fpv-vision` | `fpv-vision` |
-| `bft-fpv` | `opentakserver`, `mesh-bridge`, `fpv-vision` |
+| `TAK_HOST` / `TAK_PORT` | `isr-pi.local` / 8087 |
+| `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` | `isr-pi.local` / 1883 / `isrkit` |
+| `MQTT_PASS` | (from env; a warning is printed if missing) |
+| `VLM_URL` / `VLM_MODEL` | `http://isr-hq.local:11434` / `qwen3-vl:8b` |
+| `FPV_DEVICE` | `auto`, which picks **CUDA > Apple MPS > CPU** |
+| `FPV_MODEL` | `auto`: **YOLO26s @ 640 on a GPU**, YOLO26n @ 416 on CPU |
+| `FPV_FOOTAGE_DIRS` | `~/Movies/FPV` (folders listed in the UI's footage picker) |
+| `FPV_DATA_DIR` | `~/Library/Application Support/isr-kit/fpv-vision` |
+| `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` | 30 / 1280 |
 
-Logs: `journalctl -u fpv-vision -f`. To measure detection speed on the Pi:
+On the Pi, local tools use `guest`/`guest`. RabbitMQ's `guest` account only works over loopback,
+so the Macs must use `isrkit`, which pi-platform creates.
+
+**macOS permissions** (one-off, per terminal app):
+
+- **Camera** (for the built-in camera, iPhone Continuity Camera or a USB capture card).
+  fpv-vision asks for it at startup. If you miss the prompt, go to *System Settings → Privacy &
+  Security → Camera* and allow Terminal (or iTerm/Claude), then restart. The UI shows the
+  current state next to the source.
+- **Screen Recording** (only for the screen-mirror source). Go to *System Settings → Privacy &
+  Security → Screen & System Audio Recording*, allow your terminal app, and restart it. Without
+  it macOS returns black frames, and the UI says so.
+
+Windows/CUDA is not a priority for this demo. The code picks CUDA automatically on an NVIDIA
+machine. On Windows, install a CUDA build of torch from pytorch.org first and run
+`python -m fpv_vision` from a venv; there is no `.ps1` launcher. On Windows, cameras are opened
+by index with DirectShow.
+
+## Replay as live
+
+Pick footage in the **Footage** panel (tick one or more files, then press **▶ Replay ticked**),
+or start with `--replay ~/Movies/FPV/a.mp4 ~/Movies/FPV/b.mp4`, or set
+`FPV_SOURCE=replay:/path/a.mp4|/path/folder`.
+
+- **Real time, never slow motion.** Each file is timed to the wall clock at its native fps. If
+  decode or inference falls behind, frames are skipped (`grab()`, and a seek if more than 2 s
+  behind), so it behaves like a live feed. Detection runs on the newest frame. The UI shows
+  "N frames dropped to stay real-time".
+- **Playlist** loops forever. ⏮ / ⏭ move between files, ⏸ pauses, and the **scrub bar** seeks.
+- **Full-res decode, downscaled inference.** 4K frames are shrunk to 1280 px wide before YOLO
+  (`FPV_INFER_MAX_WIDTH`), and boxes are mapped back. The stream is shown at
+  `FPV_STREAM_WIDTH` (1280). Snapshots keep the full-resolution raw frame.
+- Detection, tracking, counts, scene description, recording and spot reports all work exactly
+  as on a live feed. Spot reports from replayed footage say so in the CoT remarks
+  ("From recorded footage: file t=…").
+- **Use the air unit's recording, not the goggles' DVR.** N3 DVR files have the OSD burned in by
+  default, and OSD text causes false detections. Use the crop tool if you have to.
+
+## Live inputs: what DJI goggles can and can't do
+
+Researched from DJI spec pages, FAQs and manuals (2026-11). V means stated by DJI; the rest is
+inference or third-party.
+
+| Goggles | Link | HDMI out | USB-C video/UVC | Live view to phone (DJI Fly) | RTMP via DJI Fly |
+|---|---|---|---|---|---|
+| **Goggles N3** (user's) | O4 only | **No** (V) | **No** (V, not documented) | **Yes, USB-C data cable or MFi Lightning** (V) | Probably; not stated for N3 |
+| Goggles 3 | O3 + O4 | No | No | Yes, cable or Wi-Fi (V) | Yes (V) |
+| Goggles 2 / Integra | O3 (+O4 with FPV RC 2) | No | No | Yes, cable | Yes, DJI Fly (3P) |
+
+All of them can relay HDMI through a DJI RC Pro (V). Unofficial firmware (fpv.wtf/WTFOS, USB
+video hacks) is deliberately not used.
+
+**So with the N3 there is no direct live feed into a computer.** The honest options, from best to worst:
+
+1. **Replay as live** with real footage. This is the headline: reliable, and it runs in real time.
+2. **Phone mirroring + screen capture (best effort, added latency).** The goggles go over USB-C
+   to the phone, and you open DJI Fly → GO FLY. Then mirror the phone to the Mac:
+   - **iPhone:** use AirPlay *Screen Mirroring* to the Mac (Control Centre → Screen Mirroring →
+     the Mac; the Mac needs AirPlay Receiver on). Or connect the iPhone by cable and use
+     QuickTime → *File → New Movie Recording* → camera = the iPhone, full screen.
+   - **Android:** `scrcpy`.
+
+   In fpv-vision choose **Screen capture** and press **✂ Crop**, then drag around the video
+   area so the DJI Fly UI is excluded. Detection then runs on the cropped region. Expect extra
+   latency from the goggles→phone link plus mirroring, and some mirroring compression. DJI
+   doesn't publish these figures, so measure them on the day. This path needs the **Screen
+   Recording** permission.
+3. **RTMP from DJI Fly** (Transmission → Live Streaming Platforms → RTMP) to an RTMP server on
+   the Mac (e.g. `mediamtx`), then use source `rtmp://localhost/live/drone`. This adds several
+   seconds of latency and is **not confirmed for the N3**. Test it before relying on it.
+4. **Live real-time boxes without the drone:** the Mac's camera or an **iPhone through Continuity
+   Camera**. These appear by name in the source list ("Camera: iPhone…"), so no index guessing.
+   A GoPro Hero 4/5 (micro-HDMI) into a USB capture card also appears as a camera, if one turns
+   up.
+
+## Post-flight analysis
+
+In the UI's **Post-flight analysis** panel, enter a path (the mounted SD card folder, e.g.
+`/Volumes/Untitled/DCIM/DJI_001`) or tick files, choose a sample rate, and press **Analyse**.
+
+- It runs in the background with its own detector, so the replay or live view keeps running.
+- Output:
+  - a per-second **timeline** of people and vehicles; click it to replay from that moment,
+  - **unique tracked counts**,
+  - up to 12 **best frames**, at least 3 s apart. Best frames are saved as normal snapshots, so
+    **describe** and **send spot report** work on them.
+- Results are also written to `<data>/analysis/*.json`.
+- Speed on the M4 Max test machine: 30 s of **1080p60 in 6 s (5×)** and **4K60 in 11 s (2.7×)**.
+  This is decode-bound, so the sample rate barely matters for 4K. A 5-minute 4K flight takes
+  about 2 minutes. The M4 Pro will be somewhat slower.
+
+## Scene description: local VLM, Gemini, offline
+
+`VLM_BACKEND` = `auto` (default) | `openai_compat` | `gemini` | `off`.
+
+- `openai_compat` uses an **Ollama** server on the HQ Mac. `VLM_URL` is the **bare** base URL
+  (`http://isr-hq.local:11434`), and we append `/v1/chat/completions`. The image is sent as a
+  base64 `image_url`. This works with **no internet**.
+- If the selected backend is unreachable, the fallback order is: **openai_compat → gemini (only
+  if `GEMINI_API_KEY` is set) → off** (local detector summary such as "2 people near a car, left
+  of frame"). The header pill shows the active backend, and each summary is labelled with what
+  produced it.
+- `auto` picks `openai_compat` when `VLM_URL` is set, else `gemini` with a key, else `off`.
+- Rate limit: `VLM_MIN_INTERVAL` (3 s) for the local VLM, `GEMINI_MIN_INTERVAL` (10 s) for
+  Gemini. An optional auto-summary every N seconds is set in the UI; it skips empty scenes.
+
+**HQ Mac (M5 Pro, 64 GB) setup.** The default model is
+[`qwen3-vl:8b`](https://ollama.com/library/qwen3-vl/tags): 6.2 GB, verified on ollama.com, and it
+needs Ollama ≥ 0.12.7.
 
 ```bash
-sudo -u fpv-vision /opt/fpv-vision/.venv/bin/python -m fpv_vision --simulate --benchmark 100 --data-dir /var/lib/fpv-vision
+ollama pull qwen3-vl:8b
+# Ollama only listens on localhost by default. Make it reachable on the hotspot:
+launchctl setenv OLLAMA_HOST 0.0.0.0:11434   # then restart the Ollama app
+curl http://isr-hq.local:11434/v1/models     # from the Drone-ops Mac
 ```
 
-Cooling: sustained inference keeps all four cores busy. Use the active cooler, or the Pi
-5 throttles at about 85 °C and FPS drops.
+Larger vision models that still fit comfortably in 64 GB, if you want richer descriptions and
+can accept slower replies:
 
-## Video sources and wiring
-
-Set `FPV_SOURCE` in `/etc/fpv-vision.env`, or pick or type a source in the web UI.
-`FPV_SOURCE=auto` uses the first USB capture device it finds, and falls back to the sample clip.
-
-| spec | source |
+| model | size |
 |---|---|
-| `uvc:/dev/video0` (or `uvc:0`) | USB UVC capture device |
-| `rtsp://host:8554/stream`, `rtmp://…`, `http(s)://…`, `udp://@:5600`, `srt://…` | network stream, opened with FFmpeg; RTSP uses TCP |
-| `file:/path/clip.mp4` | video file, looped at its native rate |
-| `gopro-usb` or `gopro-usb:172.2X.1YZ.51` | GoPro in USB webcam mode |
-| `simulate`, `simulate:aerial` | sample clips |
+| `qwen3-vl:30b` | 20 GB |
+| `qwen2.5vl:32b` | 21 GB |
+| `gemma3:27b` | 17 GB |
 
-Live sources reconnect with backoff. The header pill shows the source status and any error.
-To list capture devices on the Pi: `v4l2-ctl --list-devices`. A capture dongle usually shows two
-nodes, and the first one is the video. The Pi 5's own `pispbe`/`hevc` nodes are not cameras.
+Set `VLM_MODEL` to use one. If replies are slow, try `qwen3-vl:8b-instruct`, which skips the
+"thinking" step. Any `<think>` text is stripped from replies.
 
-### 1. Analog FPV (5.8 GHz) → USB
+## Performance: measured
 
-```
-  5" FPV quad                    ground station                        Raspberry Pi 5
- ┌───────────┐  5.8 GHz analog  ┌──────────────────┐ composite/AV  ┌───────────────┐  USB  ┌───────────┐
- │ FPV camera├──── VTX ~~~~~~~~>│ goggles / 5.8 GHz├──────────────>│ AV→USB dongle ├──────>│ Pi 5      │
- └───────────┘                  │ receiver (AV out)│  (RCA/3.5 mm) │ (UVC, e.g.    │ USB3  │ uvc:/dev/ │
-                                └──────────────────┘               │ MS2109-based) │       │  video0   │
-                                                                   └───────────────┘       └─────┬─────┘
-                                                                         Wi-Fi/Ethernet ─────────┘──> laptop/tablet :8110
-```
+The test machine was an **Apple M4 Max** (16-core CPU, 40-core GPU), with no other heavy load. It
+ran the full app: decode → detect + ByteTrack → annotate → 1280 px MJPEG. The test files were
+30 s 60 fps clips made to look like DJI files: H.264 at about 120 Mb/s, HEVC at about 100 Mb/s,
+with high detail and noise. Status figures were read after about 15 s.
 
-- Most analog goggles and box receivers have an **AV-out** jack (3.5 mm TRRS or RCA). Feed it into a
-  cheap composite-to-USB UVC dongle. Some "OTG" 5.8 GHz receivers (sold for phones) are
-  UVC devices themselves, so you can plug them straight into the Pi.
-- Analog video is 720×480 or 720×576 interlaced. Set `FPV_CAPTURE_WIDTH=720` and `FPV_CAPTURE_HEIGHT=576`
-  (PAL) or `480` (NTSC). Expect noise and breakup at range. That is a good discussion point:
-  detection confidence drops in poor video.
+| footage | model (MPS, 640) | source decode | detect fps | inference | latency* | dropped |
+|---|---|---|---|---|---|---|
+| 4K60 HEVC | yolo26n | 60.1 fps | 59.8 | 17 ms | 43 ms | 33 (startup) |
+| 4K60 HEVC | **yolo26s** (default) | 60.0 | 58.0 | 18 ms | 39 ms | 33 |
+| 4K60 HEVC | yolo26m | 60.1 | 54.2 | 20 ms | 42 ms | 36 |
+| 4K60 H.264 | yolo26s | 60.0 | 60.0 | 16 ms | 38 ms | 45 |
+| 1080p60 H.264 | yolo26s | 60.0 | 42.6 | 23 ms | 59 ms | 11 |
+| 1080p60 H.264 | yolo26n | 60.1 | 46.2 | 20 ms | 55 ms | 10 |
 
-### 2. Digital FPV goggles or anything with HDMI out → USB capture card
+\*Latency is the time from frame decoded to annotated JPEG ready, plus the age of the boxes drawn
+on it. It excludes the capture device, the network and the browser. The UI shows these values
+live.
 
-```
- goggles / monitor / camera ──HDMI──> HDMI→USB capture card (UVC, MS2109 / MS2130) ──USB3──> Pi 5 (uvc:/dev/video0)
-```
+Other results from the same machine:
 
-- Check that your goggles actually have HDMI-out. Not every digital system does, and some
-  only output HDMI in certain modes.
-- MS2109 cards are USB 2 and give 1080p30 as MJPEG. That is plenty, because the default
-  capture is 1280×720 MJPEG. MS2130 cards are USB 3.
-- Turn off on-screen display (OSD) overlays on the HDMI feed if you can. OSD text and the
-  artificial horizon cause false detections.
+- The video stream held about 27–30 fps against its 30 fps cap. CPU use was about 3.5 cores
+  for 4K60 (mostly software HEVC/H.264 decoding).
+- Raw OpenCV decode capacity: 4K60 about 110–120 fps, 1080p60 about 350 fps.
+- Detector-only microbenchmark at 640 on 1080p frames: on MPS, n 21 ms, s 20 ms, m 27 ms; on CPU
+  (PyTorch), n 35 ms, s 56 ms.
 
-### 3. GoPro
-
-**HDMI-out to a capture card is the reliable path.**
-
-```
- GoPro ──micro-HDMI (or Media Mod HDMI)──> HDMI→USB capture card ──USB──> Pi 5 (uvc:/dev/video0)
-```
-
-- HERO8 and later need the **Media Mod** for HDMI out. Some older Black models have a
-  micro-HDMI port. In the camera settings, set HDMI output to the live/clean feed, not
-  playback with overlays.
-- Power the GoPro externally for long sessions.
-
-**USB webcam mode (`gopro-usb`) is implemented but not tested on hardware.** On HERO9 and
-later, webcam mode makes the camera appear as a **USB network interface**. The Pi gets a
-`172.2X.1YZ.5x` address by DHCP, and the camera is `.51` (XYZ are the last three digits of
-the serial). fpv-vision looks for that interface, then calls the Open GoPro HTTP endpoint
-`http://<cam>:8080/gopro/webcam/start` (it falls back to the HERO8-era `/gp/gpWebcam/START`).
-It then reads the MPEG-TS stream the camera sends to UDP port 8554. GoPro's official webcam
-app is Mac/Windows only. This path uses the same open HTTP API as the community Linux
-scripts, so it depends on firmware. If it fails, use HDMI.
+**M4 Pro (Drone-ops Mac): estimated, not yet measured.** It has half the GPU cores and fewer CPU
+cores. I expect about 30–45 detect fps with yolo26s and real-time 4K60 decode with some headroom.
+**YOLO26s is the default because it keeps comfortably above 25 detect fps there.** Use yolo26m
+(`FPV_MODEL=yolo26m`) if `--benchmark` shows headroom. To measure on the machine:
 
 ```bash
-ip -4 addr | grep 172.2          # should show the GoPro USB interface
-curl http://172.2X.1YZ.51:8080/gopro/webcam/status
+scripts/run-laptop.sh --replay ~/Movies/FPV/<4k clip>.MP4 --benchmark 200
 ```
 
-### 4. Network streams (phones, IP cameras, DJI/RTMP, and so on)
+The UI's tiles show the live figures during the demo: video fps, detect fps, ms per inference,
+latency and frames per detection.
 
-```
- IP camera / phone app / NVR ──RTSP──> (Wi-Fi/Ethernet) ──> Pi 5      rtsp://192.168.1.50:554/stream1
- drone app "live stream to RTMP" ──> RTMP server on LAN ──> Pi 5      rtmp://<server>/live/drone
-```
-
-RTSP is the simplest option. To receive RTMP *pushed* from a drone app, run a small RTMP
-server (for example mediamtx) on the LAN or the Pi, and point fpv-vision at it.
-
-### 5. 360 camera
-
-You can use a 360 camera through its webcam/UVC mode or an RTSP live stream, if it has one.
-YOLO runs on whatever frame it gets. On an equirectangular (unwrapped) frame, objects near
-the edges and poles are distorted, and detection there is noticeably worse. A single-lens
-"flat" view works better.
-
-### 6. Files
-
-To replay recorded flights, pick `file:/var/lib/fpv-vision/clips/<clip>.mp4` or any MP4/WebM.
-
-## Performance (FPS)
-
-**Measured on the Mac** (Apple M4 Max, 16 cores), `python -m fpv_vision --simulate --benchmark 80`.
-Each figure is per-frame latency for detection plus ByteTrack, on 854×480 frames at imgsz 416:
-
-| model / backend | ms per frame | FPS |
-|---|---|---|
-| yolo26n · NCNN | 5.5 | 183 |
-| yolo26n · ONNX Runtime | 5.8 | 173 |
-| yolo26n · PyTorch | 9.8 | 102 |
-| yolo11n · NCNN | 5.7 | 177 |
-| yolo11n · ONNX Runtime | 6.3 | 158 |
-
-With the full app running on the Mac (capture, detect, annotate, JPEG, MJPEG), the overlay
-held the 20 FPS cap (about 18.5 measured), and the detector ran on every frame from the
-24 FPS clip.
-
-**Pi 5 estimate. This is not measured: the author had no Pi on hand when writing this.**
-Ultralytics' own Pi 5 benchmarks put YOLO26n NCNN at about **67 ms per image at 640 px**
-([Raspberry Pi guide](https://docs.ultralytics.com/guides/raspberry-pi)). Users have reported
-up to about 150 ms on less tuned setups. Scaling by pixel count to 416 px (×0.42), and
-adding tracking and pre-/post-processing:
-
-| setting | detector | overlay / stream |
-|---|---|---|
-| imgsz 416 (default), NCNN | **≈ 10–20 detections/s** (50–100 ms) | 15–20 FPS at 960 px wide |
-| imgsz 320 | ≈ 15–25 detections/s | 20 FPS |
-| imgsz 640 | ≈ 6–12 detections/s | 12–20 FPS, boxes lag more |
-| PyTorch `.pt` (no export) | roughly half of NCNN | lower |
-
-Expect less when OpenTAKServer is busy on the same Pi (`bft-fpv` profile). The UI shows real
-numbers live: video fps, detect fps, ms per inference, and frames per detection. Use
-`--benchmark` on the Pi and record the real figure here.
-
-## Detection, tracking and counting
-
-- **Model:** YOLO26n, the Ultralytics nano model, NMS-free and aimed at edge CPUs. You can
-  swap it with `FPV_MODEL=yolo11n` or a path. The order of preference is
-  `<data>/models/<name>_ncnn_model`, then `<name>.onnx`, then `<name>.pt`. To export:
-  `python -m fpv_vision.export [--format ncnn|onnx] [--imgsz 416]`. The size is fixed at export.
-- **Classes:** by default only people, vehicles (bicycle, car, motorcycle, bus, train, truck),
-  boats and aircraft are reported. Set `FPV_ALL_CLASSES=1` for all 80 COCO classes.
-- **Colours:** people are red, vehicles orange, everything else cyan.
-- **Adaptive frame-skip:** the detect thread always takes the newest frame, so on a slow CPU
-  it skips frames instead of falling behind. The render thread draws the latest boxes on every
-  frame, up to `FPV_TARGET_FPS`. If the overlay falls below about 85% of its target, the
-  detector inserts a growing pause, shown as "detector backing off N ms", to free CPU for the
-  video, and removes it again when there is headroom. The trade-off is that boxes can lag by
-  one inference, about 0.1–0.2 s on the Pi.
-- **Counting:** "in view" is the current frame. "Unique (tracked)" counts ByteTrack IDs that
-  survived at least 3 detections, which filters flicker, and counts each one once. ByteTrack
-  has no re-identification, so a person who leaves the frame and comes back, or is hidden for
-  a long time, gets a new ID. A looping clip also counts again on every loop. Use
-  **Reset counts**.
-- **Limits worth teaching:** small objects from altitude are the main weakness of a nano model
-  at 416 px (see the aerial sample). Raising `FPV_IMGSZ` to 640 helps at the cost of FPS.
-  Tiled inference (SAHI) would help more but is too slow for this CPU. Night, motion blur,
-  analog noise and OSD overlays all reduce confidence. The COCO classes come from everyday
-  photos, not military vehicles or camouflage, so a fine-tuned model would be needed for
-  that.
-
-## Gemini mode
-
-- Optional. Set `GEMINI_API_KEY` (and optionally `GEMINI_MODEL`, default `gemini-3.8-flash`)
-  in `/etc/fpv-vision.env`. It uses the official `google-genai` SDK.
-- **Describe scene** takes a snapshot and sends the raw frame, with the local detector's
-  summary as context, to Gemini, which returns a 1–2 sentence observation such as
-  "2 people standing near a pickup by the treeline". Without a key, or if the call fails,
-  the button returns the **local summary** instead. That summary comes only from the detector
-  boxes, for example "2 people near a car, left of frame; 1 truck right". The UI always labels
-  which mode produced the text.
-- **Rate limit:** at most one call every `GEMINI_MIN_INTERVAL` seconds (default 10). Calls
-  sooner than that return the local summary with a "retry in N s" note.
-- **Auto summary:** off by default. In the UI choose every 15 s, 30 s, 1 min or 2 min, or set
-  `GEMINI_PERIODIC_SECONDS`. It never runs faster than the rate limit, and it **skips empty
-  scenes** so API calls aren't wasted.
-- **Privacy:** cloud mode sends images to Google. Use demo footage only.
+**Raspberry Pi 5 (CPU, NCNN).** This is an estimate, not measured. Ultralytics' Pi 5 benchmark
+puts YOLO26n NCNN at about 67 ms at 640 px
+([guide](https://docs.ultralytics.com/guides/raspberry-pi)). At 416 px expect about 10–20
+detections/s with a 15–20 fps overlay. 4K replay is not realistic on the Pi; use 1080p or less.
 
 ## Spot reports: ATAK and mesh
 
-The **Send spot report** panel takes these inputs:
+The **Send spot report** button builds a SALUTE report from the selected snapshot, or from a
+fresh one: Size and Equipment come from the detections, Activity is free text plus the summary,
+Location is **entered by the operator** (MGRS or lat/lon) or taken from `FPV_DEFAULT_POSITION`,
+and Time is a DTG. It then sends:
 
-- **Location:** an MGRS grid (`30U WB 87427 67248`, 4–10 digits) or `lat, lon`, entered by the
-  operator. It is pre-filled from `FPV_DEFAULT_POSITION`, which you can set to the observation
-  post or the area of interest.
-- **Activity** (free text) and **Unit** (default `unk`).
-- A selected gallery snapshot, or a fresh one if none is selected. The Size and Equipment
-  fields and the summary come from that snapshot's detections.
+1. **CoT** to `TAK_HOST:TAK_PORT`: an `a-u-G` marker with `how="h-e"` (human-entered) and the full
+   report in its remarks. Messages are queued and retried with backoff if TAK is down.
+2. A **mesh text** of 200 characters or less on MQTT `meshbus/tx`, as `{"text","to":null,"channel":0,"source":"fpv-vision"}`.
+   The blufor-tracker bridge owns the radio, and we never open its serial port. Replies on
+   `meshbus/rx` show in the **Mesh inbox**. The bridge rate-limits per source, and fpv-vision
+   only sends when the operator presses the button.
 
-It sends two things:
+## Heartbeat
 
-1. **CoT** to `TAK_HOST:TAK_PORT` (default `127.0.0.1:8087`, OpenTAKServer plain TCP): a
-   `a-u-G` (unknown ground) marker at the entered position, `how="h-e"` (human-entered), with
-   a 1-hour stale time. The remarks hold the full SALUTE report and the summary. If TAK is
-   down, the report is queued and retried with backoff for up to 5 minutes. The app never
-   crashes because TAK is unavailable.
-2. **Mesh** text, under 200 characters, to MQTT `meshbus/tx` on `127.0.0.1:1883` (guest/guest).
-   The blufor-tracker bridge forwards it to the Meshtastic radio. fpv-vision **never opens the
-   radio's serial port**. Example:
+Every 10 s, fpv-vision publishes this retained message to `isrkit/heartbeat/fpv-vision`:
 
-   ```
-   SPOTREP FPV-VISION S:5 pax, 3 veh L:30U WB 87427 67248 T:161307ZNOV26 U:unk E:3x car A:pax crossing junction
-   ```
+```json
+{"tool":"fpv-vision","host":"isr-droneops","url":"http://isr-droneops.local:8110/","mode":"replay","status":"ok","ts":1794836403}
+```
 
-   Inbound mesh texts (`meshbus/rx`) appear in the **Mesh inbox** panel, so a patrol can
-   acknowledge. If the broker is down, the UI says so and the app carries on.
+- `mode` is `replay` | `simulate` | `mps` | `cuda` | `cpu`, which is the video source type, or
+  the accelerator when the input is live.
+- `status` is `ok`, `degraded` (no detector, or the source is reconnecting) or `error`.
+- On a clean exit it publishes `stopped`. The MQTT last-will publishes `error` if the process dies.
+- On macOS the host comes from `scutil --get LocalHostName`. Override it with `FPV_PUBLIC_HOST`
+  or `FPV_PUBLIC_URL`.
 
 ## Why detections are not geolocated
 
-The CoT marker is placed at the **position the operator typed**, not at a computed location
-for the boxed objects. Turning a pixel into a ground coordinate needs:
+The CoT marker goes at the **position the operator typed**, never at a computed location for
+the boxed objects. Turning a pixel into a ground coordinate needs all of these:
 
-- the drone's GPS position and **altitude above ground** (telemetry, e.g. MAVLink/MSP/DJI SDK),
-- the **camera pose**: gimbal or fixed tilt, plus the aircraft's roll, pitch and yaw, time-synced to each frame,
-- the **lens intrinsics** (focal length, distortion) of the actual camera,
-- a **terrain/elevation model** to intersect the line of sight with the ground.
+- the drone's GPS position and height above ground,
+- the camera's pose (gimbal or tilt plus aircraft attitude), time-synced to each frame,
+- lens intrinsics,
+- a terrain model.
 
-An analog FPV feed carries none of this, and a 5" FPV quad usually has a fixed, uncalibrated
-camera at a tilt that varies with throttle. Faking a position from video alone would put
-confident-looking markers in the wrong place, which is worse than no marker. Adding this would
-mean feeding flight-controller telemetry and a calibrated camera model into the pipeline.
+O3/O4 air units record no GPS (their `.SRT` sidecars carry link data, per third-party reports).
+A fixed-tilt FPV camera's pose changes with throttle. Faking it would put confident markers in
+the wrong place.
 
 ## Demo script
 
-About 10 minutes for a section, using a tablet on the Pi's Wi-Fi.
+About 10 minutes, in the office. The Drone-ops Mac runs fpv-vision; the audience watches it on
+the big screen or on a tablet at `http://isr-droneops.local:8110`.
 
-1. **Set the scene (1 min).** Open `http://<pi>:8110`. Point out the header: `LOCAL ONLY (offline)`,
-   the model and backend (`yolo26n · ncnn · ByteTrack`) and the TAK and mesh pills. Explain:
-   "Everything you see is running on this Raspberry Pi's CPU. No cloud and no AI chip."
-2. **Simulate first (2 min).** Leave the source on `Simulate: street crossing`. Show red boxes
-   for people, orange for vehicles, and the track IDs. Show the counts table: *in view*
-   compared with *unique (tracked)*. Point at the FPS tiles: detect fps compared with video
-   fps, and frames per detection. Explain the frame-skip.
-3. **Limits (1 min).** Switch to `Simulate: NASA drone pass`. Fewer and smaller detections, and
-   almost no people. Discuss altitude, pixels on target, and why "the AI" is not magic.
-4. **Live feed (3 min).** Switch to `USB capture /dev/video0` with the FPV goggles' AV-out or
-   the GoPro's HDMI going into the dongle. Fly or walk the quad (or the GoPro) past a volunteer
-   and a vehicle. Watch the unique count increase once per person. Press **Record** and stop
-   after 20 s; the clip appears under **Clips**.
-5. **Report (2 min).** Press **Describe scene**: the local summary, or Gemini's if a key is set
-   and you have internet. Tap the snapshot in the gallery, type the OP's grid and an activity,
-   and press **Send spot report**. Show the marker appearing in ATAK with the SALUTE text in
-   its remarks, and the SPOTREP text arriving on a Heltec node.
-6. **Discuss (1 min).** Why the marker is at the *entered* grid and not the target (see above).
-   What cloud mode would send off the device. How this would plug into a real ISR reporting
-   chain.
+1. **Frame it (1 min).** Point at the header and the badge in the top-right of the video:
+   **REPLAY** means real footage from our own flights, replayed in real time. Then point at the
+   detector pill (`yolo26s · pytorch/mps`): "on the laptop's GPU, no cloud".
+2. **Replay as live (3 min).** Play a playlist of 2–3 flights. Show boxes, track IDs and the
+   *unique* count compared with *in view*. Point at the tiles: 60 fps source, detect fps, about
+   40 ms latency. Scrub to an interesting moment and pause on it.
+3. **Describe (1 min).** Press **Describe scene**. The pill shows `scene: VLM qwen3-vl:8b`
+   (running on the HQ Mac, offline). Then quit Ollama on the HQ Mac to show it fall back to the local
+   summary.
+4. **Report (2 min).** Select the snapshot, enter the observation post's grid, and press **Send
+   spot report**. The marker appears in ATAK, and the SPOTREP text arrives on a Heltec node.
+5. **Post-flight (2 min).** Pretend we just landed: point **Analyse** at the SD card folder.
+   About 2 minutes later you have a timeline and best frames. Click a peak to jump the replay
+   there, and spot-report a best frame.
+6. **Live (1 min, optional).** Switch the source to **Camera: iPhone** (Continuity Camera) and
+   walk through the room for live boxes. If time allows, show the N3 → phone → screen-mirror
+   path and be clear that it is best-effort.
+7. **Discuss.** Why the marker is at the *entered* grid. What the cloud fallback would send off
+   the device. What it would take to geolocate detections.
 
-Reset between groups with **Reset counts**. Snapshots and clips persist in `/var/lib/fpv-vision`.
+Reset between groups with **Reset counts**.
+
+**Failure drills:**
+
+- No TAK or MQTT: the pills go amber and spot reports queue or report "not sent". Video carries on.
+- No HQ Mac: scene description falls back to the local summary.
+- No footage: it falls back to the sample clip.
+
+## Raspberry Pi install
+
+The Pi path is unchanged: YOLO26n NCNN on the CPU, as a pi-profiles unit.
+
+```bash
+git clone https://github.com/Jacob-Haynes/fpv-vision && cd fpv-vision
+sudo bash deploy/install.sh        # idempotent, non-interactive, does NOT enable at boot
+sudo nano /etc/fpv-vision.env      # FPV_SOURCE, FPV_DEFAULT_POSITION, optional VLM_URL
+sudo pi-profiles fpv-vision        # or bft-fpv (with OpenTAKServer + mesh bridge)
+```
+
+`install.sh` does the following:
+
+- Installs `python3-venv`, `v4l-utils`, `ffmpeg` and `libgl1`.
+- Creates the `fpv-vision` user (in the `video` group).
+- Syncs the code to `/opt/fpv-vision` (skipped when run from there) and builds a venv.
+- Creates `/var/lib/fpv-vision`, and creates `/etc/fpv-vision.env` (mode 600) only if it doesn't
+  exist.
+- Exports YOLO26n to NCNN, fetches the sample clips, and installs the unit
+  (`TimeoutStopSec=15`) and `profiles.d/*.conf`.
+
+Profiles are tagged `# @devices camera`.
+
+Pi sources:
+
+| spec | source |
+|---|---|
+| `uvc:/dev/video0` | USB capture card (analog FPV receiver AV-out, an HDMI source, GoPro Hero 4/5 micro-HDMI) |
+| `rtsp://…` / `rtmp://…` | network streams |
+| `replay:/path` | footage files |
+
+`FPV_SOURCE=auto` uses the first capture card it finds, or the sample clip if there is none.
+
+```
+ analog FPV goggles/receiver ──AV out──> AV→USB dongle (UVC) ──USB──> Pi 5 / Mac
+ HDMI source (GoPro Hero 4/5, RC Pro) ──HDMI──> HDMI→USB capture card (MS2109/MS2130) ──USB──> Pi 5 / Mac
+```
+
+## Detection, tracking and counting
+
+- **Models:** Ultralytics YOLO26 (s on GPU, n on CPU). Override with `FPV_MODEL`, `FPV_GPU_MODEL`
+  or `FPV_CPU_MODEL`. On CPU it prefers an NCNN export, then ONNX, then `.pt`
+  (`python -m fpv_vision.export`). On GPU it uses `.pt`. Weights download once into
+  `<data>/models`.
+- **Classes:** people, vehicles (bicycle, car, motorcycle, bus, train, truck), boats and aircraft.
+  Set `FPV_ALL_CLASSES=1` for all 80 COCO classes. People are drawn red, vehicles orange.
+- **Adaptive frame-skip:** the detector always takes the newest frame. The overlay is drawn on
+  every frame with the latest boxes. If the overlay drops below 85% of its target, the detector
+  backs off.
+- **Counting:** "unique" counts ByteTrack IDs seen at least 3 times. There is no
+  re-identification, so a person who leaves and comes back counts again, and a looping replay
+  counts again every loop. Use **Reset counts**.
+- **Limits worth teaching:**
+  - small objects seen from altitude;
+  - OSD overlays;
+  - motion blur;
+  - COCO classes, which are everyday objects, not military vehicles or camouflage.
 
 ## Configuration reference
 
-All settings live in `/etc/fpv-vision.env` (see [`deploy/fpv-vision.env.example`](deploy/fpv-vision.env.example)).
-CLI flags override them: `--simulate`, `--source`, `--port`, `--model`, `--imgsz`, `--no-detect`,
-`--data-dir`, `--no-tak`, `--no-mesh`, `--benchmark N`. Extra flags for the service can go in
-`FPV_EXTRA_ARGS`.
+Configuration comes from the environment (`/etc/fpv-vision.env` on the Pi, or `station.env` /
+shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…`, `--source`,
+`--port`, `--host`, `--model`, `--imgsz`, `--device`, `--no-detect`, `--data-dir`, `--tak-host`,
+`--tak-port`, `--mqtt-host`, `--mqtt-port`, `--mqtt-user`, `--mqtt-pass`, `--vlm-url`,
+`--vlm-backend`, `--no-tak`, `--no-mesh`, `--benchmark N` and `--list-cameras`.
 
 | variable | default | meaning |
 |---|---|---|
-| `FPV_SOURCE` | `simulate` (`auto` in env example) | video source spec |
-| `FPV_CAPTURE_WIDTH/HEIGHT` | 1280×720 | requested UVC capture size |
-| `FPV_MODEL` / `FPV_IMGSZ` / `FPV_CONF` | `yolo26n` / 416 / 0.30 | detector |
-| `FPV_ALL_CLASSES` | 0 | 1 = all COCO classes |
-| `FPV_TARGET_FPS` | 20 | overlay/stream cap |
-| `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 960 / 75 | MJPEG size and quality |
-| `FPV_DATA_DIR` | `/var/lib/fpv-vision` | snapshots, clips, models, samples |
-| `FPV_MAX_CLIP_SECONDS` | 300 | auto-stop recording |
-| `FPV_CALLSIGN` | `FPV-VISION` | CoT sender and mesh prefix |
-| `FPV_DEFAULT_POSITION` | – | pre-filled spot report location |
+| `FPV_SOURCE` | `simulate` | `replay:…`, `camera:<name>`, `uvc:N`, `screen:N`, `rtsp://…`, `simulate[:aerial]`, `auto` |
+| `FPV_FOOTAGE_DIRS` | `~/Movies/FPV` | folders shown in the footage picker (`:`-separated) |
+| `FPV_DEVICE` | `auto` | CUDA > MPS > CPU |
+| `FPV_MODEL` | `auto` | or a model name or path |
+| `FPV_GPU_MODEL` / `FPV_GPU_IMGSZ` | `yolo26s` / 640 | used when `FPV_MODEL=auto` |
+| `FPV_CPU_MODEL` / `FPV_CPU_IMGSZ` | `yolo26n` / 416 | used when `FPV_MODEL=auto` |
+| `FPV_IMGSZ` | 0 | 0 = auto |
+| `FPV_INFER_MAX_WIDTH` | 1280 | downscale big frames before inference |
+| `FPV_CONF` / `FPV_ALL_CLASSES` | 0.30 / 0 | |
+| `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 20 / 960 / 75 | (30 / 1280 via run-laptop.sh) |
+| `FPV_ALLOW_SCREEN` / `FPV_REQUEST_CAMERA` | 1 on macOS / 1 | screen source; macOS camera prompt |
+| `FPV_DATA_DIR` | `/var/lib/fpv-vision` or `./data` | snapshots, clips, models, analysis |
+| `FPV_CALLSIGN` / `FPV_DEFAULT_POSITION` | `FPV-VISION` / – | spot reports |
 | `TAK_HOST` / `TAK_PORT` / `TAK_ENABLED` | 127.0.0.1 / 8087 / 1 | CoT output |
-| `MQTT_HOST/PORT/USER/PASS`, `MESH_ENABLED` | 127.0.0.1 / 1883 / guest / guest / 1 | meshbus |
-| `GEMINI_API_KEY` | – | enables cloud mode |
-| `GEMINI_MODEL` | `gemini-3.8-flash` | Gemini model id |
-| `GEMINI_MIN_INTERVAL` / `GEMINI_PERIODIC_SECONDS` | 10 / 0 | rate limit and auto-summary |
-
-Recorded clips are MPEG-4 Part 2 (`mp4v`) `.mp4` files, because the Pi 5 has no hardware H.264
-encoder. They play in VLC and most desktop players. Some browsers will download them rather than
-play them inline.
+| `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASS` | 127.0.0.1 / 1883 / guest / guest | Pi defaults (Macs: `isr-pi.local`, `isrkit`) |
+| `MQTT_ENABLED` / `MESH_ENABLED` | 1 / 1 | broker connection and heartbeat / mesh sends |
+| `FPV_PUBLIC_HOST` / `FPV_PUBLIC_URL` | – | heartbeat identity override |
+| `VLM_BACKEND` / `VLM_URL` / `VLM_MODEL` / `VLM_MIN_INTERVAL` | auto / – / `qwen3-vl:8b` / 3 | scene description |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_MIN_INTERVAL` | – / `gemini-3.8-flash` / 10 | cloud fallback |
+| `GEMINI_PERIODIC_SECONDS` | 0 | auto-summary period for the active backend |
 
 ## API
 
 | method | path | |
 |---|---|---|
-| GET | `/stream.mjpg` | annotated MJPEG stream |
-| GET | `/frame.jpg` | latest annotated frame |
-| GET | `/api/status` | everything the UI shows |
-| GET/POST | `/api/sources`, `/api/source {spec}` | list and switch sources |
-| POST | `/api/snapshot`, `/api/describe {mode: auto\|local\|gemini}` | snapshot, or snapshot plus summary |
+| GET | `/stream.mjpg`, `/frame.jpg` | annotated stream / latest frame |
+| GET | `/api/status` | everything the UI shows (stats, latency, source, replay state, vlm, tak, mesh, heartbeat) |
+| GET/POST | `/api/sources`, `/api/cameras`, `/api/footage`, `/api/source {spec}` | sources |
+| POST | `/api/replay {action: seek\|pause\|next\|prev, value}` | replay control |
+| POST | `/api/crop {crop: [x,y,w,h] \| null}` | crop (normalised 0–1) |
+| POST | `/api/snapshot`, `/api/describe {mode}`, `/api/snapshots/<name>/describe` | snapshots and descriptions |
 | GET | `/api/snapshots`, `/media/snapshots/<file>` | gallery |
-| POST | `/api/record/start`, `/api/record/stop`; GET `/api/clips`, `/media/clips/<file>` | clips |
-| POST | `/api/periodic {seconds}` | Gemini auto-summary period (0 = off) |
-| POST | `/api/spot-report {position, activity, unit, snapshot?, send_cot, send_mesh}` | spot report |
-| POST | `/api/counts/reset` | reset unique counts |
+| POST/GET | `/api/analysis {target, sample_fps}`, `/api/analysis/<id>`, `/api/analysis/<id>/cancel` | post-flight analysis |
+| POST | `/api/record/start\|stop`; GET `/api/clips`, `/media/clips/<file>` | clips (mp4v) |
+| POST | `/api/periodic {seconds}`, `/api/spot-report {…}`, `/api/counts/reset` | |
 
 ## Development
 
 ```bash
-uv venv -p 3.11 .venv && uv pip install -p .venv/bin/python -r requirements-dev.txt
+uv venv -p 3.11 .venv && uv pip install -p .venv/bin/python -r requirements-desktop.txt -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 ```
 
-The tests use a fake detector and synthetic frames, so they need no hardware, network or
-weights. `tests/test_yolo_optional.py` also runs the real model on the street sample if
-`data/models` and `data/samples` exist (after the export and `python -m fpv_vision.sample data`).
+The tests need no hardware, network or weights:
 
-Layout: `fpv_vision/sources.py` handles capture, `detector.py` YOLO and ByteTrack, and
-`pipeline.py` the detect and render threads, recorder and snapshots. `summary.py` builds the
-offline scene text, `gemini.py` handles cloud mode, `geo.py` converts MGRS and lat/lon,
-`spotrep.py` builds the SALUTE report, `cot.py` the TAK output, `mesh.py` the meshbus
-connection, `service.py` the glue, and `web/` the FastAPI app and UI.
+- They use a fake detector, synthetic and generated clips, a fake Ollama HTTP server and a fake
+  MQTT client.
+- `tests/test_yolo_optional.py` also runs the real model when `data/models` and the samples exist.
+
+Code layout (`fpv_vision/`):
+
+| file | role |
+|---|---|
+| `sources.py` | replay, cameras, screen capture, network sources and crop |
+| `detector.py` | device and model selection, YOLO and ByteTrack |
+| `pipeline.py` | detect and render threads, latency figures, recorder, snapshots |
+| `analysis.py` | post-flight analysis |
+| `vlm.py` + `gemini.py` | scene description chain |
+| `mesh.py` | MQTT: mesh texts and the heartbeat |
+| `cot.py`, `spotrep.py`, `geo.py` | ATAK output, SALUTE reports, MGRS |
+| `service.py` | glue between the parts |
+| `web/` | web UI |

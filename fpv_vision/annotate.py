@@ -25,7 +25,7 @@ def scale_detections(dets: list[Detection], sx: float, sy: float) -> list[Detect
 
 
 def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
-         recording: bool = False) -> np.ndarray:
+         recording: bool = False, badge: str = "") -> np.ndarray:
     img = frame
     h, w = img.shape[:2]
     thick = max(1, round(w / 640))
@@ -48,9 +48,16 @@ def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
         cv2.rectangle(img, (6, y), (12 + tw, y + th + 8), (0, 0, 0), -1)
         cv2.putText(img, line, (9, y + th + 3), cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), 1, cv2.LINE_AA)
         y += th + 10
+    if badge:
+        (tw, th), _ = cv2.getTextSize(badge, cv2.FONT_HERSHEY_SIMPLEX, fs, 1)
+        x0 = w - tw - 14
+        colour = (0, 170, 0) if badge == "LIVE" else (0, 140, 230)
+        cv2.rectangle(img, (x0, 8), (w - 6, 16 + th), (0, 0, 0), -1)
+        cv2.rectangle(img, (x0, 8), (w - 6, 16 + th), colour, 1)
+        cv2.putText(img, badge, (x0 + 4, 12 + th), cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 255), 1, cv2.LINE_AA)
     if recording and int(time.time() * 2) % 2 == 0:
-        cv2.circle(img, (w - 24, 22), 9, (0, 0, 255), -1)
-        cv2.putText(img, "REC", (w - 70, 28), cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.circle(img, (w - 24, 44), 9, (0, 0, 255), -1)
+        cv2.putText(img, "REC", (w - 70, 50), cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 255), 2, cv2.LINE_AA)
     return img
 
 
