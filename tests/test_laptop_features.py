@@ -259,12 +259,12 @@ def test_resolve_model_gpu_prefers_pytorch(tmp_path):
     assert det_mod.resolve_model("yolo26s", tmp_path, prefer_pytorch=True)[1] == "pytorch"
 
 
-def test_service_heartbeat_modes(settings):
+def test_service_heartbeat_modes(settings, monkeypatch):
     from fpv_vision.cot import CotSender
     from fpv_vision.pipeline import Pipeline
     from fpv_vision.service import Service
 
-    settings.public_host = "isr-droneops"
+    monkeypatch.setenv("ISR_HOST", "ISR-DroneOps")
     p = Pipeline(settings, FakeDetector(), sources.VideoSource("synthetic"))
     svc = Service(settings, p, SceneDescriber("off", None, GeminiDescriber("", "g")), CotSender(enabled=False),
                   MeshBus(enabled=False))
@@ -303,3 +303,100 @@ def test_duplicate_filter_keeps_noisy_static_scene_and_caps_runs():
     kept = [not f2.is_duplicate(base) for _ in range(9)]
     assert kept == [True, False, False, False, True, False, False, False, True]
     assert sources.DuplicateFilter(enabled=False).is_duplicate(base) is False
+
+
+def test_heartbeat_host_defaults_to_gethostname(monkeypatch):
+    import socket
+
+    from fpv_vision.service import short_hostname
+
+    monkeypatch.delenv("ISR_HOST", raising=False)
+    monkeypatch.setattr(socket, "gethostname", lambda: "Field-Laptop.lan")
+    assert short_hostname() == "field-laptop"
+    monkeypatch.setenv("ISR_HOST", "isr-droneops")
+    assert short_hostname() == "isr-droneops"
+
+
+def test_provenance_prefixes_on_cot_and_mesh():
+    from fpv_vision import spotrep
+
+    dets = [__import__("fpv_vision.detector", fromlist=["Detection"]).Detection(0, "person", 0.9, (0, 0, 5, 9), 1)]
+    for prov, cot_p, mesh_p in (("simulated", "SIMULATED: ", "[SIM] "), ("recorded", "RECORDED: ", "[REC] "),
+                                ("live", "", "")):
+        r = spotrep.build(dets=dets, position="51.15,-1.75", activity="x" * 400, summary_text="s",
+                          callsign="FPV-VISION", provenance=prov)
+        assert r["remarks"].startswith(cot_p + "SALUTE")
+        assert r["mesh_text"].startswith(mesh_p + "SPOTREP") and len(r["mesh_text"]) < 200
+    with pytest.raises(ValueError):
+        spotrep.build(dets=dets, position="0, 0", activity="", summary_text="", callsign="X")
+
+
+def test_provenance_of_snapshots():
+    from fpv_vision.service import Service
+
+    assert Service.provenance_of({"provenance": "recorded"}) == "recorded"
+    assert Service.provenance_of({"source": "simulate"}) == "simulated"
+    assert Service.provenance_of({"source": "/d/samples/sample_street_cc0_480p.webm"}) == "simulated"
+    assert Service.provenance_of({"source": "replay:/x.mp4"}) == "recorded"
+    assert Service.provenance_of({"source": "/Volumes/SD/DJI_0001.MP4", "video_file": "DJI_0001.MP4"}) == "recorded"
+    assert Service.provenance_of({"source": "camera:USB3 Video"}) == "live"
+
+
+def test_default_position_fallback(settings):
+    from fpv_vision.cot import CotSender
+    from fpv_vision.pipeline import Pipeline
+    from fpv_vision.service import Service
+
+    p = Pipeline(settings, FakeDetector(), sources.VideoSource("synthetic"))
+    svc = Service(settings, p, SceneDescriber("off", None, GeminiDescriber("", "g")), CotSender(enabled=False),
+                  MeshBus(enabled=False))
+    assert svc.default_position() == ""
+    settings.sensor_lat, settings.sensor_lon = 0.0, 0.0
+    assert svc.default_position() == ""  # never 0,0
+    settings.sensor_lat, settings.sensor_lon = 51.15, -1.75
+    assert svc.default_position() == "51.150000, -1.750000"
+    settings.default_position = "30U WB 87427 67248"
+    assert svc.default_position() == "30U WB 87427 67248"
+    settings.default_position, settings.sensor_lat, settings.sensor_lon = "", None, None
+    p.source.start()
+    try:
+        assert wait_for(lambda: p.source.latest()[1] is not None)
+        p._raw_frame = p._annotated = p.source.latest()[1]
+        r = svc.spot_report(position="")
+        assert r["ok"] is False and "no position" in r["error"]
+    finally:
+        p.source.stop()
+
+
+def test_mesh_rate_limit_one_per_30s():
+    bus = MeshBus(enabled=True)
+    bus._client, bus.connected = _Client(), True
+    assert bus.send("first")
+    assert bus.send("second") is False and "rate limit" in bus.last_error
+    bus._last_send -= 31
+    assert bus.send("third")
+
+
+def test_cot_rate_limit_per_uid():
+    from fpv_vision import cot
+
+    s = cot.CotSender(enabled=True)  # not started: just queues
+    a = cot.spot_report_cot(lat=51.0, lon=-1.0, callsign="A", remarks="r", uid="fpv-a")
+    b = cot.spot_report_cot(lat=51.0, lon=-1.0, callsign="B", remarks="r", uid="fpv-b")
+    assert s.send(a) and s.send(b)
+    assert s.send(a) is False and "rate limit" in s.last_error
+    s._last_uid["fpv-a"] -= 6
+    assert s.send(a)
+
+
+def test_replay_snapshot_is_marked_recorded(settings, tmp_path):
+    from fpv_vision.pipeline import Pipeline
+
+    clip = make_clip(tmp_path / "DJI_0001.MP4.avi", n=90, fps=30)
+    p = Pipeline(settings, FakeDetector(), sources.VideoSource(f"replay:{clip}")).start()
+    try:
+        assert wait_for(lambda: p.latest_jpeg()[1])
+        snap = p.take_snapshot()
+        assert snap["provenance"] == "recorded" and snap["video_file"] == "DJI_0001.MP4.avi"
+    finally:
+        p.stop()

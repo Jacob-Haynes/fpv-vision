@@ -26,6 +26,7 @@ RX_TOPIC = "meshbus/rx"
 HEARTBEAT_TOPIC = "isrkit/heartbeat/fpv-vision"
 HEARTBEAT_PERIOD = 10.0
 MAX_TEXT = 199
+MESH_MIN_INTERVAL = 30.0  # contract C4.4: at most 1 mesh text per 30 s per tool
 
 
 class MeshBus:
@@ -39,6 +40,8 @@ class MeshBus:
         self.heartbeat_fn = heartbeat_fn  # () -> dict; None disables the heartbeat
         self.heartbeats = 0
         self._hb_stop = threading.Event()
+        self.min_interval = MESH_MIN_INTERVAL
+        self._last_send = 0.0
         self.connected = False
         self.last_error = ""
         self.sent = 0
@@ -147,19 +150,29 @@ class MeshBus:
             log.warning("mesh bus not connected; not sent: %s", text)
             self.last_error = "broker not connected"
             return False
+        wait = self.retry_in()
+        if wait > 0:
+            self.last_error = f"mesh rate limit: 1 text per {self.min_interval:.0f} s, retry in {wait:.0f} s"
+            log.warning("%s; not sent: %s", self.last_error, text)
+            return False
         body = json.dumps(self.payload(text, to, channel, self.source))
         try:
             info = self._client.publish(TX_TOPIC, body, qos=1)
             ok = info.rc == 0
             if ok:
                 self.sent += 1
+                self._last_send = time.time()
+                self.last_error = ""
             return ok
         except Exception as e:  # noqa: BLE001
             self.last_error = str(e)
             log.warning("mesh publish failed: %s", e)
             return False
 
+    def retry_in(self) -> float:
+        return max(0.0, self._last_send + self.min_interval - time.time())
+
     def status(self) -> dict:
-        return {"enabled": self.enabled and self.mesh_enabled, "host": self.host, "port": self.port,
+        return {"retry_in": round(self.retry_in(), 1), "enabled": self.enabled and self.mesh_enabled, "host": self.host, "port": self.port,
                 "user": self.user, "connected": self.connected, "sent": self.sent, "error": self.last_error,
                 "heartbeats": self.heartbeats, "rx": list(self.rx)[:10]}

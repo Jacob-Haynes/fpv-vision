@@ -189,11 +189,22 @@ class AnalysisJob:
         ann = annotate.draw(frame.copy(), dets, [f"POST-FLIGHT {c['file']} t={c['t']:.1f}s"], badge="REPLAY ANALYSIS")
         meta = self.pipeline.save_snapshot(frame, ann, dets, frame.shape[1], note="post-flight", source=c["path"],
                                            extra={"video_file": c["file"], "video_time": c["t"],
-                                                  "analysis": self.id, "score": c["score"]}, prefix="pf")
+                                                  "analysis": self.id, "score": c["score"],
+                                                  "provenance": self._provenance(c["path"])}, prefix="pf")
         meta["summary"], meta["summary_mode"] = meta["local_summary"], "local"
         self.pipeline.save_snapshot_meta(meta)
         return {"name": meta["name"], "image": meta["image"], "file": c["file"], "t": c["t"],
                 "counts": meta["counts"], "summary": meta["local_summary"]}
+
+    def _provenance(self, path: str) -> str:
+        """Post-flight footage is 'recorded'; the bundled sample clips are 'simulated'."""
+        try:
+            samples = (self.pipeline.settings.data_dir / "samples").resolve()
+            if Path(path).resolve().is_relative_to(samples):
+                return "simulated"
+        except (OSError, ValueError):
+            pass
+        return "recorded"
 
     def _persist(self) -> None:
         try:

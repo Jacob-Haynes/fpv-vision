@@ -168,7 +168,10 @@ def test_spot_report_api(app_client):
     rep = r.json()
     assert rep["report"]["grid"] == "30U WB 87427 67248"
     assert rep["report"]["size"] == "2 pax, 2 veh"
-    assert rep["cot"] == {"queued": False, "connected": False}  # TAK disabled in tests
+    assert rep["cot"]["queued"] is False and rep["cot"]["connected"] is False  # TAK disabled in tests
+    assert rep["report"]["provenance"] == "simulated"  # synthetic source
+    assert rep["report"]["remarks"].startswith("SIMULATED: ")
+    assert rep["mesh"]["text"].startswith("[SIM] SPOTREP")
     assert rep["mesh"]["sent"] is False
     assert len(rep["mesh"]["text"]) < 200
     # using an existing snapshot

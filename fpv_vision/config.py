@@ -103,13 +103,14 @@ class Settings:
     tak_enabled: bool = True
     callsign: str = "FPV-VISION"
     default_position: str = ""  # "lat,lon" or MGRS grid for spot reports
+    sensor_lat: float | None = None  # shared isr-kit SENSOR_LAT/SENSOR_LON (fallback position)
+    sensor_lon: float | None = None
     mqtt_host: str = "127.0.0.1"
     mqtt_port: int = 1883
     mqtt_user: str = "guest"
     mqtt_pass: str = "guest"
     mesh_enabled: bool = True
     mqtt_enabled: bool = True
-    public_host: str = ""  # short hostname for the heartbeat (default: this machine's)
     public_url: str = ""  # full UI URL for the heartbeat (default http://<host>.local:<port>/)
 
     @property
@@ -171,13 +172,17 @@ class Settings:
         s.tak_enabled = _env_bool("TAK_ENABLED", s.tak_enabled)
         s.callsign = _env("FPV_CALLSIGN", s.callsign)
         s.default_position = _env("FPV_DEFAULT_POSITION", s.default_position)
+        try:
+            s.sensor_lat = float(_env("SENSOR_LAT")) if _env("SENSOR_LAT") else None
+            s.sensor_lon = float(_env("SENSOR_LON")) if _env("SENSOR_LON") else None
+        except ValueError:
+            s.sensor_lat = s.sensor_lon = None
         s.mqtt_host = _env("MQTT_HOST", s.mqtt_host)
         s.mqtt_port = _env_int("MQTT_PORT", s.mqtt_port)
         s.mqtt_user = _env("MQTT_USER", s.mqtt_user)
         s.mqtt_pass = _env("MQTT_PASS", s.mqtt_pass)
         s.mesh_enabled = _env_bool("MESH_ENABLED", s.mesh_enabled)
         s.mqtt_enabled = _env_bool("MQTT_ENABLED", s.mqtt_enabled)
-        s.public_host = _env("FPV_PUBLIC_HOST", s.public_host)
         s.public_url = _env("FPV_PUBLIC_URL", s.public_url)
         s.vlm_backend = _env("VLM_BACKEND", s.vlm_backend)
         s.vlm_url = _env("VLM_URL", s.vlm_url)

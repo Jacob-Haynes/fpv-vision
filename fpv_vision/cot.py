@@ -19,6 +19,9 @@ from xml.sax.saxutils import escape, quoteattr
 log = logging.getLogger(__name__)
 
 QUEUE_TTL = 300  # drop queued reports older than this if TAK never comes back
+UID_MIN_INTERVAL = 5.0  # contract C4.4: at most 1 CoT per 5 s per uid
+
+_UID_RE = __import__("re").compile(r'<event[^>]*\suid="([^"]+)"')
 
 
 def iso(ts: float) -> str:
@@ -55,6 +58,7 @@ class CotSender:
         self.last_error = ""
         self.sent = 0
         self._thread: threading.Thread | None = None
+        self._last_uid: dict[str, float] = {}
 
     def start(self) -> "CotSender":
         if self.enabled:
@@ -70,6 +74,15 @@ class CotSender:
         """Queue a CoT event; returns False only if disabled or the queue is full."""
         if not self.enabled:
             return False
+        m = _UID_RE.search(xml)
+        if m:
+            uid, now = m.group(1), time.time()
+            if now - self._last_uid.get(uid, 0.0) < UID_MIN_INTERVAL:
+                self.last_error = f"CoT rate limit: uid {uid} sent < {UID_MIN_INTERVAL:.0f} s ago"
+                return False
+            self._last_uid[uid] = now
+            if len(self._last_uid) > 1000:
+                self._last_uid = {k: v for k, v in self._last_uid.items() if now - v < UID_MIN_INTERVAL}
         try:
             self._q.put_nowait((time.time(), xml.encode("utf-8")))
             return True

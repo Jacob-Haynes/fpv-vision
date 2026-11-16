@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 import os
 import socket
@@ -44,21 +43,11 @@ def make_source(spec: str, settings) -> sources.VideoSource:
                                sample_path=sample_path, loop_seconds=loop, fps=settings.capture_fps)
 
 
-@functools.lru_cache(maxsize=1)
 def short_hostname() -> str:
-    """The machine's mDNS name without .local (isr-pi / isr-hq / isr-droneops)."""
-    import sys
-
-    if sys.platform == "darwin":
-        try:
-            import subprocess
-
-            name = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True,
-                                  timeout=2).stdout.strip()
-            if name:
-                return name.lower()
-        except (OSError, subprocess.SubprocessError):
-            pass
+    """Contract C4.1: env ISR_HOST if set, else the lowercased short socket.gethostname()."""
+    env = os.environ.get("ISR_HOST", "").strip()
+    if env:
+        return env.lower()
     return socket.gethostname().split(".")[0].lower()
 
 
@@ -157,7 +146,10 @@ class Service:
     # ------------------------------------------------------------ spot report
     def spot_report(self, *, position: str, activity: str = "", snapshot: str | None = None, unit: str = "unk",
                     send_cot: bool = True, send_mesh: bool = True) -> dict:
-        position = (position or "").strip() or self.settings.default_position
+        position = (position or "").strip() or self.default_position()
+        if not position:
+            return {"ok": False, "error": "no position: enter a grid / lat,lon (or set FPV_DEFAULT_POSITION or "
+                                          "SENSOR_LAT/SENSOR_LON)"}
         if snapshot:
             snap = self.pipeline.load_snapshot(snapshot)
             if snap is None:
@@ -172,7 +164,7 @@ class Service:
         try:
             rep = spotrep.build(dets=dets, position=position, activity=activity,
                                 summary_text=snap.get("summary") or snap.get("local_summary", ""),
-                                callsign=self.settings.callsign, unit=unit)
+                                callsign=self.settings.callsign, unit=unit, provenance=self.provenance_of(snap))
         except ValueError as e:
             return {"ok": False, "error": f"position: {e}"}
         if snap.get("video_file"):  # be explicit that this came from recorded footage
@@ -182,14 +174,36 @@ class Service:
             xml = cot.spot_report_cot(lat=rep["lat"], lon=rep["lon"], callsign=rep["callsign"],
                                       remarks=rep["remarks"], sender=self.settings.callsign)
             queued = self.tak.send(xml)
-            out["cot"] = {"queued": queued, "connected": self.tak.connected}
+            out["cot"] = {"queued": queued, "connected": self.tak.connected,
+                          "error": None if queued else self.tak.last_error}
         if send_mesh:
-            out["mesh"] = {"sent": self.mesh.send(rep["mesh_text"]), "text": rep["mesh_text"]}
+            sent = self.mesh.send(rep["mesh_text"])
+            out["mesh"] = {"sent": sent, "text": rep["mesh_text"], "error": None if sent else self.mesh.last_error}
         snap.setdefault("reports", []).append({"ts": time.time(), **{k: rep[k] for k in ("grid", "dtg", "mesh_text")}})
         self.pipeline.save_snapshot_meta(snap)
         self.reports.insert(0, {"ts": time.time(), **out})
         del self.reports[20:]
         return out
+
+    def default_position(self) -> str:
+        """Operator default (FPV_DEFAULT_POSITION), else shared SENSOR_LAT/SENSOR_LON. Never 0,0."""
+        if self.settings.default_position:
+            return self.settings.default_position
+        lat, lon = self.settings.sensor_lat, self.settings.sensor_lon
+        if lat is not None and lon is not None and not (lat == 0 and lon == 0):
+            return f"{lat:.6f}, {lon:.6f}"
+        return ""
+
+    @staticmethod
+    def provenance_of(snap: dict) -> str:
+        if snap.get("provenance") in ("live", "simulated", "recorded"):
+            return snap["provenance"]
+        src = str(snap.get("source", "")).lower()  # snapshots from before provenance was recorded
+        if src.startswith(("simulate", "synthetic")) or "/samples/" in src:
+            return "simulated"
+        if snap.get("video_file") or src.startswith(("replay:", "file:")) or src.endswith(tuple(sources.VIDEO_EXTS)):
+            return "recorded"
+        return "live"
 
     # ------------------------------------------------------------ footage library
     def footage_dirs(self) -> list[Path]:
@@ -302,8 +316,7 @@ class Service:
     def public_url(self) -> str:
         if self.settings.public_url:
             return self.settings.public_url
-        host = self.settings.public_host or short_hostname()
-        return f"http://{host}.local:{self.settings.port}/"
+        return f"http://{short_hostname()}.local:{self.settings.port}/"
 
     def detail(self) -> str:
         """Human summary for the launcher, e.g. 'yolo26s mps 1080p 42fps, VLM qwen3-vl:8b @ isr-hq'."""
@@ -332,7 +345,7 @@ class Service:
         return f"{head}, local summary"
 
     def heartbeat(self) -> dict:
-        return {"tool": "fpv-vision", "host": self.settings.public_host or short_hostname(),
+        return {"tool": "fpv-vision", "host": short_hostname(),
                 "url": self.public_url(), "mode": self.mode(), "status": self.health(), "ts": int(time.time()),
                 "detail": self.detail()}
 
@@ -366,7 +379,7 @@ class Service:
             "mesh": self.mesh.status(),
             "heartbeat": self.heartbeat(),
             "camera_permission": sources.camera_permission_status(),
-            "default_position": self.settings.default_position,
+            "default_position": self.default_position(),
             "callsign": self.settings.callsign,
             "reports": self.reports[:5],
             "jobs": [j.to_dict(full=False) for j in list(self.jobs.values())[-3:]],

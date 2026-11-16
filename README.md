@@ -330,15 +330,28 @@ detections/s with a 15–20 fps overlay. 4K replay is not realistic on the Pi; u
 
 The **Send spot report** button builds a SALUTE report from the selected snapshot, or from a
 fresh one: Size and Equipment come from the detections, Activity is free text plus the summary,
-Location is **entered by the operator** (MGRS or lat/lon) or taken from `FPV_DEFAULT_POSITION`,
-and Time is a DTG. It then sends:
+Location is **entered by the operator** (MGRS or lat/lon). If the operator leaves it empty it
+falls back to `FPV_DEFAULT_POSITION`, then to the shared `SENSOR_LAT`/`SENSOR_LON`. With none of
+those set the report is refused: **we never emit 0,0**. Time is a DTG. It then sends:
 
 1. **CoT** to `TAK_HOST:TAK_PORT`: an `a-u-G` marker with `how="h-e"` (human-entered) and the full
    report in its remarks. Messages are queued and retried with backoff if TAK is down.
 2. A **mesh text** of 200 characters or less on MQTT `meshbus/tx`, as `{"text","to":null,"channel":0,"source":"fpv-vision"}`.
    The blufor-tracker bridge owns the radio, and we never open its serial port. Replies on
-   `meshbus/rx` show in the **Mesh inbox**. The bridge rate-limits per source, and fpv-vision
-   only sends when the operator presses the button.
+   `meshbus/rx` show in the **Mesh inbox**.
+
+**Provenance labels (contract C4.3).** Reports made from the sample clips start with
+`SIMULATED: ` in the CoT remarks and `[SIM] ` in the mesh text. Reports from replayed or
+post-flight footage start with `RECORDED: ` and `[REC] `. Reports from live capture (camera,
+capture card, screen mirror, network stream) have no prefix. The label is stored with each
+snapshot when it is taken, so a recorded best frame stays `[REC]` even after you switch to a
+live source.
+
+**Rate limits (contract C4.4).**
+- At most **1 mesh text per 30 s**. A second spot report inside that window still sends its
+  CoT, and the UI says "mesh rate limit … retry in N s".
+- At most **1 CoT per 5 s per uid**. Every spot report has its own uid, so this only stops
+  accidental double-sends.
 
 ## Heartbeat
 
@@ -353,8 +366,9 @@ Every 10 s, fpv-vision publishes this retained message to `isrkit/heartbeat/fpv-
 - `detail` is optional and human-readable, e.g. `"yolo26s mps 1080p 58fps, VLM qwen3-vl:8b @ isr-hq"`.
 - `status` is `ok`, `degraded` (no detector, or the source is reconnecting) or `error`.
 - On a clean exit it publishes `stopped`. The MQTT last-will publishes `error` if the process dies.
-- On macOS the host comes from `scutil --get LocalHostName`. Override it with `FPV_PUBLIC_HOST`
-  or `FPV_PUBLIC_URL`.
+- `host` follows contract C4.1: env `ISR_HOST` if set, otherwise the lowercased short
+  `socket.gethostname()`. The `url` is `http://<host>.local:<port>/`; override it with
+  `FPV_PUBLIC_URL`.
 
 ## Why detections are not geolocated
 
@@ -484,11 +498,12 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 20 / 960 / 75 | (30 / 1280 via run-laptop.sh) |
 | `FPV_ALLOW_SCREEN` / `FPV_REQUEST_CAMERA` | 1 on macOS / 1 | screen source; macOS camera prompt |
 | `FPV_DATA_DIR` | `/var/lib/fpv-vision` or `./data` | snapshots, clips, models, analysis |
-| `FPV_CALLSIGN` / `FPV_DEFAULT_POSITION` | `FPV-VISION` / – | spot reports |
+| `FPV_CALLSIGN` / `FPV_DEFAULT_POSITION` | `FPV-VISION` / – | spot reports (position falls back to `SENSOR_LAT`/`SENSOR_LON`) |
 | `TAK_HOST` / `TAK_PORT` / `TAK_ENABLED` | 127.0.0.1 / 8087 / 1 | CoT output |
 | `MQTT_HOST` / `MQTT_PORT` / `MQTT_USER` / `MQTT_PASS` | 127.0.0.1 / 1883 / guest / guest | Pi defaults (Macs: `isr-pi.local`, `isrkit`) |
 | `MQTT_ENABLED` / `MESH_ENABLED` | 1 / 1 | broker connection and heartbeat / mesh sends |
-| `FPV_PUBLIC_HOST` / `FPV_PUBLIC_URL` | – | heartbeat identity override |
+| `ISR_HOST` / `FPV_PUBLIC_URL` | gethostname / `http://<host>.local:<port>/` | heartbeat identity |
+| `SENSOR_LAT` / `SENSOR_LON` | – | shared fallback spot-report position (never 0,0) |
 | `VLM_BACKEND` / `VLM_URL` / `VLM_MODEL` / `VLM_MIN_INTERVAL` | auto / – / `qwen3-vl:8b` / 3 | scene description |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` / `GEMINI_MIN_INTERVAL` | – / `gemini-3.8-flash` / 10 | cloud fallback |
 | `GEMINI_PERIODIC_SECONDS` | 0 | auto-summary period for the active backend |

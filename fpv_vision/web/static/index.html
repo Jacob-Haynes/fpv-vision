@@ -461,7 +461,7 @@ $("btnSpot").onclick = async () => {
       snapshot: selectedSnap, send_cot: $("sendCot").checked, send_mesh: $("sendMesh").checked });
     const parts = [`Grid ${r.report.grid} · ${r.report.dtg}`];
     if (r.cot) parts.push(`CoT: ${r.cot.queued ? (r.cot.connected ? "sent to TAK" : "queued (TAK offline, will retry)") : "not sent"}`);
-    if (r.mesh) parts.push(`Mesh: ${r.mesh.sent ? "published" : "NOT sent (broker offline)"}\n“${r.mesh.text}”`);
+    if (r.mesh) parts.push(`Mesh: ${r.mesh.sent ? "published" : `NOT sent (${r.mesh.error || "broker offline"})`}\n“${r.mesh.text}”`);
     msg($("spotMsg"), parts.join("\n"), true); refreshGallery();
   } catch (e) { msg($("spotMsg"), e.message, false); }
   finally { $("btnSpot").disabled = false; }

@@ -333,8 +333,11 @@ class Pipeline:
         extra = {}
         if self.source.is_replay:
             extra = {"video_file": self.source.replay.get("file"), "video_time": round(self.source.replay.get("pos", 0), 1)}
+        kind = self.source.spec.kind
+        provenance = "simulated" if (kind in ("simulate", "synthetic") or self.source.resolved == "synthetic") else \
+            "recorded" if kind == "replay" else "live"
         return self.save_snapshot(raw, ann, dets, shape[1] or raw.shape[1], note=note,
-                                  source=self.source.spec.raw, extra=extra)
+                                  source=self.source.spec.raw, extra={**extra, "provenance": provenance})
 
     def save_snapshot(self, raw: np.ndarray, ann: np.ndarray, dets: list[Detection], frame_width: int, *,
                       note: str = "", source: str = "", extra: dict | None = None, prefix: str = "snap") -> dict:
