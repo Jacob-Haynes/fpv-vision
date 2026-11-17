@@ -20,7 +20,7 @@
   .fv-full { width: 100%; }
   .fv-side select { width: 100%; margin-bottom: 10px; }
   #replayBar { display: none; }
-  #replayBar input[type=range] { flex: 1 1 200px; min-height: 0; padding: 0; }
+  #replayBar input[type=range] { flex: 1 1 200px; min-height: 0; padding: 0; accent-color: var(--muted); }
   #counts li { align-items: center; }
   #counts .name { flex: 1; text-transform: capitalize; }
   .fv-msg { min-height: 1.5em; margin-top: 8px; }
@@ -232,7 +232,7 @@ function renderStatus(s) {
   $("banner").textContent = camDenied ? "Camera access is blocked. Allow it for Terminal in System Settings, Privacy & Security, Camera, then restart."
     : "No video. Check the capture card is plugged in, then press Start.";
 
-  const [cls, word] = TAG[provOf(src.kind)];
+  const [cls, word] = TAG[/\/samples\//.test(src.spec) ? "simulated" : provOf(src.kind)];  // bundled samples count as simulated
   $("srcTag").className = "isr-tag " + cls; $("srcTag").textContent = word;
 
   // source picker + the one primary button
