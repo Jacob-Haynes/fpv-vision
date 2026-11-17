@@ -75,8 +75,13 @@ class Settings:
     stream_width: int = 960
     jpeg_quality: int = 75
     air: bool = False  # Air watch: open-vocabulary drone/helicopter/aeroplane/bird detector (FPV_AIR)
-    air_fps: float = 10.0
-    air_name_conf: float = 0.7  # YOLOE confidence a track needs before the vision model is asked to name it  # max Air watch passes per second (each pass = full frame + 2x2 tiles)
+    air_fps: float = 10.0  # max Air watch passes per second (each pass = full frame + 2x2 tiles)
+    air_name_conf: float = 0.7  # YOLOE confidence a track needs before the vision model is asked to name it
+    search: bool = False  # Search: ground detector on tiles for small, distant people/vehicles (FPV_SEARCH)
+    search_conf: float = 0.25
+    search_grid: str = "auto"  # auto = 3x3 for 1440p and up, else 2x2; or 1/2/3
+    search_hits: int = 2  # consecutive passes before a Search box is shown
+    search_air_fps: float = 5.0  # Air watch rate cap while Search is on (they share the GPU)
     show_hud: bool = False  # debug text (model, fps, time) burned into the video; the provenance badge is always drawn
 
     # --- replay / footage library ---
@@ -165,6 +170,11 @@ class Settings:
         s.air = _env_bool("FPV_AIR", s.air)
         s.air_fps = _env_float("FPV_AIR_FPS", s.air_fps)
         s.air_name_conf = _env_float("FPV_AIR_NAME_CONF", s.air_name_conf)
+        s.search = _env_bool("FPV_SEARCH", s.search)
+        s.search_conf = _env_float("FPV_SEARCH_CONF", s.search_conf)
+        s.search_grid = os.environ.get("FPV_SEARCH_GRID", s.search_grid).strip() or "auto"
+        s.search_hits = _env_int("FPV_SEARCH_HITS", s.search_hits)
+        s.search_air_fps = _env_float("FPV_SEARCH_AIR_FPS", s.search_air_fps)
         if _env("FPV_DATA_DIR"):
             s.data_dir = Path(_env("FPV_DATA_DIR"))
         s.footage_dirs = _env("FPV_FOOTAGE_DIRS", s.footage_dirs)

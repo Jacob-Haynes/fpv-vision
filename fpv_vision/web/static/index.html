@@ -20,7 +20,8 @@
   .fv-full { width: 100%; }
   [hidden] { display: none !important; }
   .fv-side select { width: 100%; margin-bottom: 10px; }
-  .fv-air { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .fv-modes { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; }
+  .fv-air { display: flex; align-items: center; gap: 8px; }
   .fv-air input { min-height: 0; }
   #airTracks:empty { display: none; }
   #airTracks li { align-items: center; padding: 4px 0; }
@@ -102,7 +103,10 @@
         <div class="fv-state"><span id="srcState" class="isr-mono"></span>
           <button class="isr-btn" id="btnStop">Stop</button></div>
         <button class="isr-btn primary fv-full" id="btnGo">Start</button>
-        <label class="fv-air"><input type="checkbox" id="airToggle"> Air watch <span class="isr-muted" id="airState"></span></label>
+        <div class="fv-modes">
+          <label class="fv-air" title="Tiles the frame to find small, distant people and vehicles"><input type="checkbox" id="searchToggle"> Search <span class="isr-muted" id="searchState"></span></label>
+          <label class="fv-air"><input type="checkbox" id="airToggle"> Air watch <span class="isr-muted" id="airState"></span></label>
+        </div>
         <div class="fv-msg isr-muted" id="srcMsg"></div>
       </div>
       <div class="isr-card">
@@ -241,6 +245,8 @@ function checks(s) {
   out.push({ name: "Video", state: src.connected ? "ok" : "bad", text: src.connected ? `${src.height}p ${fps}` : camGone ? "camera not connected" : "no signal" });
   if (camGone) out.push({ name: "Camera", state: "bad", text: "not connected" });
   out.push({ name: "Detector", state: d.name === "none" ? "bad" : "ok", text: d.name === "none" ? "off" : `${shortModel(d.model)} on ${d.device}` });
+  const se = s.search || {};
+  if (se.on) out.push({ name: "Search", state: "ok", text: `${se.fps || 0} per second` });
   if (src.kind === "camera" && ["denied", "restricted"].includes(s.camera_permission))
     out.push({ name: "Camera", state: "bad", text: "access denied" });
   out.push({ name: "AI", optional: true, state: v.active === "openai_compat" || v.active === "gemini" ? "ok" : v.selected !== "off" ? "warn" : "idle",
@@ -306,13 +312,15 @@ function renderStatus(s) {
   if (!$("pos").value && !posTouched && s.default_grid) $("pos").value = s.default_grid;
   if (document.activeElement !== $("hudToggle")) $("hudToggle").checked = !!s.hud;
   renderAir(s.air || {});
+  renderSearch(s.search || {});
 
   // Details
   kv($("perf"), [["Video", `${st.render_fps || 0} fps`], ["Detections", `${st.detect_fps || 0} per second`],
     ["Inference", `${st.detect_ms || 0} ms`], ["Latency", `${Math.round(st.latency_ms || 0)} ms (frame in to boxes drawn, excludes capture and browser)`],
     ["Frames per detection", st.frames_per_detection || ""], ["Detector back-off", st.detect_gap_ms ? `${st.detect_gap_ms} ms` : ""]]);
   kv($("detInfo"), [["Model", d.name === "none" ? `none (${d.reason || "not loaded"})` : shortModel(d.model)], ["Runtime", d.backend ? `${d.backend} on ${d.device}` : ""],
-    ["Image size", d.imgsz], ["Confidence threshold", d.conf], ["Tracker", d.tracker]]);
+    ["Image size", d.imgsz], ["Confidence threshold", d.conf], ["Tracker", d.tracker],
+    ["Search", s.search && s.search.on ? `on: ${(s.search.model || {}).tiles || "tiles"}, confidence ${s.search.conf}, shown after ${s.search.hits} passes in a row, ${s.search.ms} ms a pass; Air watch held to ${s.search.air_fps_cap} per second` : "off"]]);
   kv($("srcInfo"), [["Current", src.spec], ["Opened as", src.resolved], ["Size", src.width ? `${src.width}×${src.height}` : ""],
     ["Device mode", src.negotiated], ["Receiving", src.live ? `${src.fps_in} fps, ${src.fps_unique} unique (${src.duplicates_dropped} padded duplicates dropped)` : ""],
     ["Clip", rp ? `${rp.file} (${rp.index + 1} of ${rp.files.length}), ${rp.fps} fps, ${rp.dropped} frames skipped to stay real-time` : ""],
@@ -340,6 +348,18 @@ function renderStatus(s) {
   $("meshRx").innerHTML = rx.map(x => `<li><b>${esc(x.from_short || x.from || "?")}</b> ${esc(x.text)} <span class="isr-muted">${ago(x.ts)}</span></li>`).join("");
   if (!jobId && s.jobs && s.jobs.length) { const j = s.jobs[s.jobs.length - 1]; if (j.state === "running") watchJob(j.id); }
 }
+
+// ---------------------------------------------------------------- Search
+function renderSearch(se) {
+  if (document.activeElement !== $("searchToggle")) $("searchToggle").checked = !!se.on;
+  $("searchState").textContent = se.on ? `${se.fps || 0} per second` : "";
+}
+$("searchToggle").onchange = async () => {
+  const on = $("searchToggle").checked;
+  if (on) say($("srcMsg"), "Loading Search…");
+  try { await api("/api/search", { on }); say($("srcMsg"), ""); poll(); }
+  catch (e) { $("searchToggle").checked = false; say($("srcMsg"), `Search is unavailable: ${e.message}`, false); }
+};
 
 // ---------------------------------------------------------------- Air watch
 function renderAir(a) {

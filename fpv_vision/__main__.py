@@ -251,6 +251,10 @@ def main(argv=None) -> int:
         res = service.set_air(True)
         if not res["ok"]:
             log.warning("FPV_AIR=1 but Air watch is unavailable: %s", res["error"])
+    if settings.search:  # FPV_SEARCH=1
+        res = service.set_search(True)
+        if not res["ok"]:
+            log.warning("FPV_SEARCH=1 but Search is unavailable: %s", res["error"])
     mesh.heartbeat_fn = service.heartbeat
     mesh.start()
     service.start()

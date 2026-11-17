@@ -222,6 +222,9 @@ class Pipeline:
         self.on_air_track = None  # callback(Detection) when an air track is first counted
         self.air_namer = None  # fpv_vision.air_namer.AirNamer: the vision model names air tracks
         self._air_dets: list[Detection] = []
+        # Search (fpv_vision.search): the ground detector on tiles, in place of the normal pass
+        self.search = None  # SearchDetector once loaded
+        self.search_on = False
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> "Pipeline":
@@ -248,6 +251,8 @@ class Pipeline:
             self._dets = []
             self._air_dets = []
         self.detector.reset_tracks()
+        if self.search is not None:
+            self.search.reset_tracks()
         if self.air is not None:
             self.air.reset_tracks()
         self.air_counter.reset()
@@ -298,15 +303,16 @@ class Pipeline:
                 continue
             last_id = fid
             t0 = time.perf_counter()
+            det = self.search if (self.search_on and self.search is not None) else self.detector
             try:
-                dets = self.detector.detect(frame)
+                dets = det.detect(frame)
             except Exception as e:  # noqa: BLE001
                 log.exception("detector error: %s", e)
                 dets = []
                 time.sleep(0.5)
             dt = time.perf_counter() - t0
-            if src is not self.source:  # source switched mid-inference
-                continue
+            if src is not self.source or det is not (self.search if self.search_on else self.detector):
+                continue  # source switched or Search toggled mid-inference
             if self.air_on:  # the air model owns aircraft and birds; avoid double boxes
                 dets = [d for d in dets if d.cls_id not in AIR_COCO]
             dets = self.counter.update(dets)  # one voted class per track
@@ -381,7 +387,10 @@ class Pipeline:
             if time.time() - t_window >= 2.0:
                 self.air_stats["fps"] = round(n / (time.time() - t_window), 1)
                 n, t_window = 0, time.time()
-            period = 1.0 / max(0.5, self.settings.air_fps)
+            rate = self.settings.air_fps
+            if self.search_on:  # Search and Air watch share the GPU: the ground picture comes first
+                rate = min(rate, self.settings.search_air_fps)
+            period = 1.0 / max(0.5, rate)
             if dt < period:
                 self._stop.wait(period - dt)
 
@@ -390,6 +399,14 @@ class Pipeline:
         if not self.air_on:
             with self._lock:
                 self._air_dets = []
+
+    def set_search(self, on: bool) -> None:
+        on = bool(on) and self.search is not None
+        if on != self.search_on:
+            (self.search if on else self.detector).reset_tracks()  # start the incoming tracker clean
+            with self._lock:
+                self._dets = []
+        self.search_on = on
 
     def _render_loop(self) -> None:
         last_id = -1
@@ -420,7 +437,8 @@ class Pipeline:
             counts = summary.count_by_label(dets)
             accel = getattr(self.detector, "accelerator", "cpu").upper()
             hud = [
-                f"FPV-VISION  {self.hud_mode}  {self.detector.backend.upper()}/{accel}",
+                f"FPV-VISION  {self.hud_mode}  {self.detector.backend.upper()}/{accel}"
+                + ("  SEARCH" if self.search_on else ""),
                 f"video {self.stats.render_fps:.0f}fps  det {self.stats.detect_fps:.1f}fps  "
                 f"lat {self.stats.pipeline_ms + self.stats.box_lag_ms:.0f}ms",
             ]

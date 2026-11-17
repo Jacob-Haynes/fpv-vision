@@ -191,6 +191,13 @@ def create_app(service) -> FastAPI:
             raise HTTPException(409, res.get("error", "Air watch unavailable"))
         return res
 
+    @app.post("/api/search")
+    async def search_toggle(body: dict = Body(...)):
+        res = await run_in_threadpool(service.set_search, bool(body.get("on", False)))
+        if not res["ok"]:
+            raise HTTPException(409, res["error"])
+        return res
+
     @app.post("/api/air/mark")
     async def air_mark(body: dict = Body(...)):
         try:

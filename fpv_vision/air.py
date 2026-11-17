@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from fpv_vision.detector import Detection
+from fpv_vision.tiling import byte_tracker, drop_cut, merge, predict_tiles, tiles, track  # noqa: F401
 
 log = logging.getLogger(__name__)
 
@@ -64,75 +65,7 @@ def cot_type(label: str, hostile: bool = False) -> str | None:
     return f"a-h-{t[4:]}" if t and hostile else t
 
 
-# ---------------------------------------------------------------- tiling + NMS
-def tiles(w: int, h: int, grid: int = 2, overlap: float = 0.15) -> list[tuple[int, int, int, int]]:
-    """``grid``×``grid`` overlapping tiles (x0, y0, x1, y1) covering the frame, plus the full frame first."""
-    out = [(0, 0, w, h)]
-    if grid <= 1:
-        return out
-    tw, th = w / (grid - (grid - 1) * overlap), h / (grid - (grid - 1) * overlap)
-    for r in range(grid):
-        for c in range(grid):
-            x0, y0 = int(round(c * tw * (1 - overlap))), int(round(r * th * (1 - overlap)))
-            out.append((x0, y0, min(w, int(round(x0 + tw))), min(h, int(round(y0 + th)))))
-    return out
-
-
-def _iou(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    x1, y1 = np.maximum(a[0], b[:, 0]), np.maximum(a[1], b[:, 1])
-    x2, y2 = np.minimum(a[2], b[:, 2]), np.minimum(a[3], b[:, 3])
-    inter = np.clip(x2 - x1, 0, None) * np.clip(y2 - y1, 0, None)
-    area = lambda z: (z[..., 2] - z[..., 0]) * (z[..., 3] - z[..., 1])  # noqa: E731
-    return inter / np.maximum(area(a) + area(b) - inter, 1e-9)
-
-
-def _ios(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Intersection over the smaller box: catches a tile's half-box inside the full-frame box."""
-    x1, y1 = np.maximum(a[0], b[:, 0]), np.maximum(a[1], b[:, 1])
-    x2, y2 = np.minimum(a[2], b[:, 2]), np.minimum(a[3], b[:, 3])
-    inter = np.clip(x2 - x1, 0, None) * np.clip(y2 - y1, 0, None)
-    area = lambda z: (z[..., 2] - z[..., 0]) * (z[..., 3] - z[..., 1])  # noqa: E731
-    return inter / np.maximum(np.minimum(area(a), area(b)), 1e-9)
-
-
-def drop_cut(rows: np.ndarray, rect: tuple[int, int, int, int], w: int, h: int, margin: int = 4) -> np.ndarray:
-    """Drop tile boxes cut by an *inner* tile edge: those objects are whole in the full-frame pass."""
-    x0, y0, x1, y1 = rect
-    cut = np.zeros(len(rows), bool)
-    if x0 > 0:
-        cut |= rows[:, 0] <= x0 + margin
-    if y0 > 0:
-        cut |= rows[:, 1] <= y0 + margin
-    if x1 < w:
-        cut |= rows[:, 2] >= x1 - margin
-    if y1 < h:
-        cut |= rows[:, 3] >= y1 - margin
-    return rows[~cut]
-
-
-def merge(boxes: np.ndarray, iou: float = 0.5, ios: float = 0.8) -> np.ndarray:
-    """Class-agnostic greedy NMS over rows [x1, y1, x2, y2, conf, cls]; highest confidence wins.
-
-    Class-agnostic on purpose: the same object called "drone" in one tile and "bird" in another
-    must end up as ONE box (the more confident call). A box mostly inside a kept box is dropped
-    too, which removes the partial boxes that tiles produce at their edges.
-    """
-    if len(boxes) == 0:
-        return boxes.reshape(0, 6)
-    order = np.argsort(-boxes[:, 4])
-    b = boxes[order]
-    keep = []
-    alive = np.ones(len(b), bool)
-    for i in range(len(b)):
-        if not alive[i]:
-            continue
-        keep.append(i)
-        rest = np.where(alive)[0]
-        rest = rest[rest > i]
-        if len(rest):
-            drop = (_iou(b[i], b[rest]) > iou) | (_ios(b[i], b[rest]) > ios)
-            alive[rest[drop]] = False
-    return b[keep]
+# tiling + NMS live in fpv_vision.tiling (shared with Search); re-exported for callers
 
 
 # ---------------------------------------------------------------- model files
@@ -198,41 +131,16 @@ class AirDetector:
         log.info("air watch loaded: %s on %s, %d×%d tiles + full frame", weights.name, device, grid, grid)
 
     def reset_tracks(self) -> None:
-        from ultralytics.trackers.byte_tracker import BYTETracker
-        from ultralytics.utils import IterableSimpleNamespace, YAML
-        from ultralytics.utils.checks import check_yaml
-
-        cfg = YAML.load(check_yaml("bytetrack.yaml"))
-        cfg.update(track_high_thresh=self.conf, track_low_thresh=0.1, new_track_thresh=self.conf)
-        self._tracker = BYTETracker(IterableSimpleNamespace(**cfg))
+        self._tracker = byte_tracker(self.conf)
 
     def raw(self, frame: np.ndarray) -> np.ndarray:
         """Merged (untracked) rows [x1, y1, x2, y2, conf, model_cls] in frame coordinates."""
-        h, w = frame.shape[:2]
-        rects = tiles(w, h, self.grid)
-        crops = [frame[y0:y1, x0:x1] for x0, y0, x1, y1 in rects]
         with self._lock:
-            results = self._model.predict(crops, imgsz=self.imgsz, conf=self.conf, device=self.device, verbose=False)
-        rows = []
-        for rect, r in zip(rects, results):
-            b = r.boxes
-            if b is None or len(b) == 0:
-                continue
-            xyxy = b.xyxy.cpu().numpy()
-            xyxy[:, [0, 2]] += rect[0]
-            xyxy[:, [1, 3]] += rect[1]
-            row = np.column_stack([xyxy, b.conf.cpu().numpy(), b.cls.cpu().numpy()])
-            rows.append(row if rect == rects[0] else drop_cut(row, rect, w, h))
-        return merge(np.concatenate(rows)) if rows else np.zeros((0, 6))
+            return predict_tiles(self._model, frame, self.grid, imgsz=self.imgsz, conf=self.conf, device=self.device)
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
-        from ultralytics.engine.results import Boxes
-
-        rows = self.raw(frame)
-        tracked = self._tracker.update(Boxes(rows.astype(np.float32), frame.shape[:2]).cpu().numpy(), frame) \
-            if len(rows) else self._tracker.update(Boxes(np.zeros((0, 6), np.float32), frame.shape[:2]), frame)
         out = []
-        for t in tracked:
+        for t in track(self._tracker, self.raw(frame), frame):
             x1, y1, x2, y2, tid, conf, cls = t[:7]
             cls_id, label = map_prompt(self._names.get(int(cls), "drone"))
             out.append(Detection(cls_id, label, float(conf), (int(x1), int(y1), int(x2), int(y2)),

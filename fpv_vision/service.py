@@ -53,7 +53,8 @@ def short_hostname() -> str:
 
 class Service:
     def __init__(self, settings, pipeline: Pipeline, describer: SceneDescriber, tak: cot.CotSender, mesh: MeshBus,
-                 detector_factory=None, air_factory=None, namer_client=None):
+                 detector_factory=None, air_factory=None, namer_client=None,
+                 search_factory=None):
         self.settings = settings
         self.pipeline = pipeline
         self.describer = describer
@@ -69,6 +70,8 @@ class Service:
         self.started = time.time()
         # Air watch
         self.air_factory = air_factory or self._default_air_factory
+        self.search_factory = search_factory or self._default_search_factory
+        self.search_error = ""
         self.air_error = ""
         self.air_events: list[dict] = []  # newest first: what was reported for each new air track
         pipeline.on_air_track = self._on_air_track
@@ -83,6 +86,36 @@ class Service:
         self._stop.set()
         for j in self.jobs.values():
             j.cancel()
+
+    # ------------------------------------------------------------ Search
+    def _default_search_factory(self):
+        from fpv_vision.search import SearchDetector
+
+        det = self.pipeline.detector
+        if not getattr(det, "model_path", None):
+            raise RuntimeError("no detector model loaded")
+        return SearchDetector.from_detector(det, self.settings)
+
+    def set_search(self, on: bool) -> dict:
+        """Turn Search (tiled ground detection) on/off. Loads its own copy of the weights on first use."""
+        if on and self.pipeline.search is None:
+            try:
+                self.pipeline.search = self.search_factory()
+                self.search_error = ""
+            except Exception as e:  # noqa: BLE001
+                self.search_error = str(e)
+                log.warning("search unavailable: %s", e)
+                return {"ok": False, "search": False, "error": self.search_error}
+        self.pipeline.set_search(on)
+        return {"ok": True, "search": self.pipeline.search_on}
+
+    def search_status(self) -> dict:
+        p = self.pipeline
+        s = self.settings
+        return {"on": p.search_on, "loaded": p.search is not None, "error": self.search_error,
+                "fps": p.stats.detect_fps if p.search_on else 0.0, "ms": p.stats.detect_ms if p.search_on else 0.0,
+                "model": p.search.info() if p.search is not None else None,
+                "conf": s.search_conf, "hits": s.search_hits, "air_fps_cap": s.search_air_fps}
 
     # ------------------------------------------------------------ Air watch
     def _default_air_factory(self):
@@ -542,6 +575,7 @@ class Service:
             "counts": summary.count_by_label(dets),
             "totals": {**p.counter.snapshot(), **p.air_counter.snapshot()},
             "air": self.air_status(),
+            "search": self.search_status(),
             "live_summary": summary.describe(dets, shape[1] or 1) if shape[1] else "",
             "last_summary": self.last_summary,
             "hud": self.settings.show_hud,
