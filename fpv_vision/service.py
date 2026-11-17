@@ -254,8 +254,15 @@ class Service:
 
     # ------------------------------------------------------------ sources
     def available_sources(self) -> list[dict]:
-        items = [{"spec": "simulate", "label": "Simulate: street crossing, handheld (CC0)", "group": "simulate"},
-                 {"spec": "simulate:aerial", "label": "Simulate: NASA drone pass (public domain)", "group": "simulate"}]
+        from fpv_vision import sample
+
+        def sim(spec, name, label):
+            cached = sample.cached_sample(self.settings.data_dir, name) is not None
+            return {"spec": spec, "label": label + ("" if cached else " (not downloaded: test pattern)"),
+                    "group": "simulate", "cached": cached}
+
+        items = [sim("simulate", "street", "Simulate: street crossing, handheld (CC0)"),
+                 sim("simulate:aerial", "aerial", "Simulate: NASA drone pass (public domain)")]
         cams = sources.list_cameras()
         for c in cams:
             spec = f"camera:{c['name']}" if not str(c["index"]).startswith("/dev/") else f"uvc:{c['index']}"

@@ -242,9 +242,12 @@ function renderStatus(s) {
   ISR.setStatus(checks(s));
 
   const camDenied = src.kind === "camera" && ["denied", "restricted"].includes(s.camera_permission);
-  $("banner").hidden = !camDenied && src.connected !== false;
+  const noSample = src.kind === "simulate" && src.resolved === "synthetic";
+  $("banner").hidden = !camDenied && !noSample && src.connected !== false;
+  $("banner").classList.toggle("bad", camDenied || !src.connected);
   $("banner").textContent = camDenied ? "Camera access is blocked. Allow it for Terminal in System Settings, Privacy & Security, Camera, then restart."
-    : "No video. Check the capture card is plugged in, then press Start.";
+    : !src.connected ? "No video. Check the capture card is plugged in, then press Start."
+    : "The sample clip is not on this Mac, so this is a test pattern. While online, run scripts/run-laptop.sh --setup-only.";
 
   const [cls, word] = TAG[/\/samples\//.test(src.spec) ? "simulated" : provOf(src.kind)];  // bundled samples count as simulated
   $("srcTag").className = "isr-tag " + cls; $("srcTag").textContent = word;

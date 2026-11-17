@@ -3,7 +3,7 @@
 #
 #   scripts/run-laptop.sh                    # serve http://0.0.0.0:8110
 #   scripts/run-laptop.sh --replay ~/Movies/FPV/flight1.mp4
-#   scripts/run-laptop.sh --setup-only       # create/refresh the venv and exit
+#   scripts/run-laptop.sh --setup-only       # venv + sample clips + model weights, then exit (run online)
 #
 # Config comes from the ENVIRONMENT only (the platform's laptop/start-mac.sh sources
 # ~/.config/isr-kit/station.env first). Exits cleanly on SIGTERM/Ctrl-C.
@@ -48,13 +48,24 @@ setup_venv() {
     fi
 }
 
-if [ "${1:-}" = "--setup-only" ]; then setup_venv; echo "[fpv-vision] ready"; exit 0; fi
+export FPV_DATA_DIR="${FPV_DATA_DIR:-$HOME/Library/Application Support/isr-kit/fpv-vision}"
+if [ "${1:-}" = "--setup-only" ]; then
+    setup_venv
+    mkdir -p "$FPV_DATA_DIR"
+    # demo day is offline: fetch the sample clips and model weights now (retries with backoff)
+    if "$VENV/bin/python" -m fpv_vision --prefetch; then
+        echo "[fpv-vision] ready (works offline)"
+    else
+        echo "[fpv-vision] setup done, but something is missing (see above); rerun while online" >&2
+        exit 1
+    fi
+    exit 0
+fi
 setup_venv
 
 # ---- defaults for a Mac on the isr-kit hotspot (only applied when not already set) ----
 export FPV_HOST="${FPV_HOST:-0.0.0.0}"
 export FPV_PORT="${FPV_PORT:-8110}"
-export FPV_DATA_DIR="${FPV_DATA_DIR:-$HOME/Library/Application Support/isr-kit/fpv-vision}"
 export FPV_FOOTAGE_DIRS="${FPV_FOOTAGE_DIRS:-$HOME/Movies/FPV}"
 export FPV_TARGET_FPS="${FPV_TARGET_FPS:-30}"
 export FPV_STREAM_WIDTH="${FPV_STREAM_WIDTH:-1280}"

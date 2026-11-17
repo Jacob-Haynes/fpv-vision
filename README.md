@@ -58,12 +58,23 @@ is never presented as live.
 git clone https://github.com/Jacob-Haynes/fpv-vision ~/Repos/isr-kit/fpv-vision
 cd ~/Repos/isr-kit/fpv-vision
 mkdir -p ~/Movies/FPV && cp /Volumes/<card>/DCIM/*/*.MP4 ~/Movies/FPV/   # your O3/O4 footage
-scripts/run-laptop.sh --setup-only        # one-off: venv + torch/ultralytics (needs internet)
+scripts/run-laptop.sh --setup-only        # one-off, online: venv, sample clips, YOLO weights
 scripts/run-laptop.sh                      # http://isr-droneops.local:8110
 ```
 
-The first run downloads the YOLO26s weights (19 MB) and the sample clips into
-`~/Library/Application Support/isr-kit/fpv-vision`. After that **no internet is needed**.
+`--setup-only` downloads the YOLO26s weights (19 MB) and both sample clips (about 9 MB each) into
+`~/Library/Application Support/isr-kit/fpv-vision`, and exits non-zero if anything is still
+missing. After that **no internet is needed**, so run it before demo day while online.
+
+- Downloads retry with backoff (honouring `Retry-After` on HTTP 429) and send a descriptive
+  User-Agent, as Wikimedia asks. The street clip falls back to a 360p transcode and the original
+  upload. `FPV_SAMPLE_URL` points at your own copy.
+- A copy already in `<data dir>/samples/` or in the checkout's `data/samples/` is reused.
+- **To copy a clip in by hand** (for example from another Mac), put `sample_street_cc0_480p.webm`
+  and `sample_aerial_nasa_480p.webm` into `<data dir>/samples/`.
+- If a clip is missing, simulate shows a synthetic test pattern. The page says so in a banner,
+  and the Source list marks the clip "not downloaded". `python -m fpv_vision --prefetch` does the
+  same fetch without the venv step.
 If `~/Movies/FPV` contains footage, the app starts replaying it, looped. Otherwise it plays the
 simulate clip.
 
@@ -563,6 +574,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | POST/GET | `/api/analysis {target, sample_fps}`, `/api/analysis/<id>`, `/api/analysis/<id>/cancel` | post-flight analysis |
 | POST | `/api/record/start\|stop`; GET `/api/clips`, `/media/clips/<file>` | clips (mp4v) |
 | POST | `/api/periodic {seconds}`, `/api/spot-report {…}`, `/api/counts/reset` | |
+| POST | `/api/run {on}`, `/api/hud {on}` | Stop/Start detection and the stream; debug text on the video |
 
 ## Development
 

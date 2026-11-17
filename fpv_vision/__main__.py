@@ -41,6 +41,8 @@ def parse_args(argv=None):
     p.add_argument("--no-tak", action="store_true", help="disable CoT output")
     p.add_argument("--no-mesh", action="store_true", help="disable meshbus output")
     p.add_argument("--benchmark", type=int, metavar="N", help="time N frames of detection on the source and exit")
+    p.add_argument("--prefetch", action="store_true",
+                   help="download the sample clips and model weights for offline use, then exit (run while online)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -150,6 +152,28 @@ def probe_camera(settings: Settings, spec: str, n: int = 180) -> int:
     return 0
 
 
+def prefetch(settings: Settings) -> int:
+    """Everything fpv-vision downloads on first use, fetched now so demo day can be offline."""
+    from fpv_vision import sample
+    from fpv_vision.detector import choose_model, ensure_weights, resolve_model, select_device
+
+    ok = True
+    for name, path in sample.prefetch(settings.data_dir).items():
+        print(f"sample {name}: {path or 'MISSING (copy it into ' + str(settings.data_dir / 'samples') + ')'}")
+        ok = ok and path is not None
+    device = select_device(settings.device)
+    model, _ = choose_model(settings, device)
+    path, backend = resolve_model(model, settings.models_dir, prefer_pytorch=device != "cpu")
+    if backend == "pytorch":
+        try:
+            path = ensure_weights(path)
+        except Exception as e:  # noqa: BLE001
+            print(f"model {model}: MISSING ({e})")
+            return 1
+    print(f"model {model}: {path} ({backend}, {device})")
+    return 0 if ok else 1
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
@@ -166,6 +190,9 @@ def main(argv=None) -> int:
         if not cams:
             print("no cameras found (Linux: v4l2-ctl --list-devices)")
         return 0
+
+    if args.prefetch:
+        return prefetch(settings)
 
     if args.benchmark:
         return run_benchmark(settings, args.benchmark)

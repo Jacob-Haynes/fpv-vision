@@ -665,8 +665,9 @@ class VideoSource:
         w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 0
         code = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-        fourcc = "".join(chr((code >> 8 * i) & 0xFF) for i in range(4)).strip("\x00 ") if code else ""
-        fourcc = fourcc if fourcc.isprintable() else ""
+        # CAP_PROP_FOURCC is -1 / 0 when the backend doesn't report it: only show real ASCII codes
+        chars = [(code >> 8 * i) & 0xFF for i in range(4)] if code > 0 else []
+        fourcc = "".join(map(chr, chars)).strip("\x00 ") if chars and all(32 <= c < 127 or c == 0 for c in chars) and chars[0] else ""
         return f"{w}x{h}" + (f"@{fps:.0f}" if fps else "") + (f" {fourcc}" if fourcc else "")
 
     def _run_synthetic(self) -> None:
