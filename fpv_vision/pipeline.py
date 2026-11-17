@@ -256,6 +256,9 @@ class Pipeline:
                 continue
             src = self.source
             fid, frame, fts = src.latest()
+            if frame is None and self._dets:  # source disconnected: no stale boxes or counts
+                with self._lock:
+                    self._dets = []
             if frame is None or fid == last_id:
                 time.sleep(0.005)
                 continue

@@ -210,6 +210,12 @@ video hacks) is deliberately not used.
   M4 Max, where it lists as "Guermok USB3 Video") and changes with what else is plugged in. The
   name match is a case-insensitive substring, so `camera:USB3 Video` finds it on both;
   `--list-cameras` shows the names.
+- **A name never falls back to another camera.** Every open and reconnect lists the devices
+  afresh (in a short subprocess, because a long-running process's AVFoundation list goes stale
+  after an unplug). It then checks that the opened index still has the matched device's uniqueID.
+  If the card is unplugged, the page and the status pill say **Capture card not connected**.
+  fpv-vision keeps looking for that name only, and sends no detections, CoT or mesh until it is
+  back. Only a bare number (`camera:0`, `uvc:0`) opens by index.
   **The card always outputs 1920×1080 @ 60 fps, but only 30 of those are real**; every second
   frame is a copy. fpv-vision **drops padded duplicates** before inference. It compares each
   frame with the previous one on a strided full-resolution sample (`FPV_DEDUP_THRESHOLD`,

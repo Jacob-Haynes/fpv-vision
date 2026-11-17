@@ -224,7 +224,9 @@ const shortModel = (m) => String(m || "").split("/").pop().replace(/\.pt$|_ncnn_
 function checks(s) {
   const src = s.source, d = s.detector, v = s.vlm, t = s.tak, m = s.mesh, out = [];
   const fps = src.live && Math.abs(src.fps_in - src.fps_unique) > 1 ? `${Math.round(src.fps_unique)} of ${Math.round(src.fps_in)} fps` : `${Math.round(src.fps_unique)} fps`;
-  out.push({ name: "Video", state: src.connected ? "ok" : "bad", text: src.connected ? `${src.height}p ${fps}` : "no signal" });
+  const camGone = src.live && !src.connected && /not connected/.test(src.error || "");
+  out.push({ name: "Video", state: src.connected ? "ok" : "bad", text: src.connected ? `${src.height}p ${fps}` : camGone ? "camera not connected" : "no signal" });
+  if (camGone) out.push({ name: "Camera", state: "bad", text: "not connected" });
   out.push({ name: "Detector", state: d.name === "none" ? "bad" : "ok", text: d.name === "none" ? "off" : `${shortModel(d.model)} on ${d.device}` });
   if (src.kind === "camera" && ["denied", "restricted"].includes(s.camera_permission))
     out.push({ name: "Camera", state: "bad", text: "access denied" });
@@ -246,6 +248,7 @@ function renderStatus(s) {
   $("banner").hidden = !camDenied && !noSample && src.connected !== false;
   $("banner").classList.toggle("bad", camDenied || !src.connected);
   $("banner").textContent = camDenied ? "Camera access is blocked. Allow it for Terminal in System Settings, Privacy & Security, Camera, then restart."
+    : !src.connected && /not connected/.test(src.error || "") ? `${src.error}. Plug it in: fpv-vision keeps looking for it and never switches to another camera.`
     : !src.connected ? "No video. Check the capture card is plugged in, then press Start."
     : "The sample clip is not on this Mac, so this is a test pattern. While online, run scripts/run-laptop.sh --setup-only.";
 

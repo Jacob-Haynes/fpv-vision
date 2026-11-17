@@ -113,25 +113,54 @@ def list_uvc_devices() -> list[str]:
     return out
 
 
-def list_cameras() -> list[dict]:
+# Same enumeration as OpenCV's AVFoundation backend: video + muxed devices sorted by uniqueID.
+_AVF_ENUM = (
+    "import json, AVFoundation as A\n"
+    "d = list(A.AVCaptureDevice.devicesWithMediaType_(A.AVMediaTypeVideo)) + "
+    "list(A.AVCaptureDevice.devicesWithMediaType_(A.AVMediaTypeMuxed))\n"
+    "d.sort(key=lambda x: str(x.uniqueID()))\n"
+    "print(json.dumps([{'index': i, 'name': str(x.localizedName()), 'id': str(x.uniqueID())} for i, x in enumerate(d)]))"
+)
+
+
+def _avf_in_process() -> list[dict]:
+    """This process's own AVFoundation list: what OpenCV maps indexes with. It can be STALE in a
+    long-running process (no run loop, so unplug/plug notifications never arrive)."""
+    import AVFoundation as AVF  # pyobjc-framework-AVFoundation
+
+    devs = list(AVF.AVCaptureDevice.devicesWithMediaType_(AVF.AVMediaTypeVideo)) + \
+        list(AVF.AVCaptureDevice.devicesWithMediaType_(AVF.AVMediaTypeMuxed))
+    devs.sort(key=lambda d: str(d.uniqueID()))
+    return [{"index": i, "name": str(d.localizedName()), "id": str(d.uniqueID())} for i, d in enumerate(devs)]
+
+
+def _avf_fresh(timeout: float = 10.0) -> list[dict]:
+    """The CURRENT device list, from a short-lived subprocess (always up to date)."""
+    import json
+
+    out = subprocess.run([sys.executable, "-c", _AVF_ENUM], capture_output=True, text=True, timeout=timeout,
+                         check=True).stdout
+    return json.loads(out.strip().splitlines()[-1])
+
+
+def list_cameras(fresh: bool = True) -> list[dict]:
     """Cameras with names and the index OpenCV will use for them.
 
     macOS: same enumeration as OpenCV's AVFoundation backend (video + muxed devices sorted by
     uniqueID), so names line up with indexes. Includes Continuity Camera iPhones and USB
-    capture cards. Linux: V4L2 nodes with their driver names.
+    capture cards. ``fresh`` (default) enumerates in a subprocess, because this process's own
+    list goes stale after a device is unplugged. Linux: V4L2 nodes with their driver names.
     """
     cams: list[dict] = []
     if sys.platform == "darwin":
         try:
-            import AVFoundation as AVF  # pyobjc-framework-AVFoundation
-
-            devs = list(AVF.AVCaptureDevice.devicesWithMediaType_(AVF.AVMediaTypeVideo)) + \
-                list(AVF.AVCaptureDevice.devicesWithMediaType_(AVF.AVMediaTypeMuxed))
-            devs.sort(key=lambda d: str(d.uniqueID()))
-            for i, d in enumerate(devs):
-                cams.append({"index": i, "name": str(d.localizedName()), "id": str(d.uniqueID())})
+            cams = _avf_fresh() if fresh else _avf_in_process()
         except Exception as e:  # noqa: BLE001
-            log.debug("AVFoundation listing unavailable: %s", e)
+            log.debug("AVFoundation listing unavailable (%s); using this process's list", e)
+            try:
+                cams = _avf_in_process()
+            except Exception as e2:  # noqa: BLE001
+                log.debug("AVFoundation listing unavailable: %s", e2)
     elif sys.platform.startswith("linux"):
         for d in list_uvc_devices():
             name_file = Path(f"/sys/class/video4linux/{Path(d).name}/name")
@@ -173,12 +202,56 @@ def request_camera_permission(timeout: float = 30.0) -> str:
     return camera_permission_status()
 
 
+class CameraNotConnected(RuntimeError):
+    """The named camera is not plugged in (or macOS cannot see it). Never fall back to another."""
+
+
+def camera_missing_text(name: str) -> str:
+    n = name.lower()
+    what = "Capture card" if any(k in n for k in ("usb3 video", "usb video", "capture", "hdmi", "cam link",
+                                                  "guermok")) else f"Camera '{name}'"
+    return f"{what} not connected"
+
+
 def resolve_camera(name: str) -> int | str | None:
-    want = name.strip().lower()
-    for c in list_cameras():
-        if want in c["name"].lower():
-            return c["index"]
+    """OpenCV index for a camera NAME (case-insensitive substring), from a fresh device list.
+
+    A bare number is an explicit index and is returned as-is. A name that is not in the current
+    list returns None: we never fall back to an index, so an unplugged capture card can never
+    silently become the presenter's built-in webcam.
+    """
+    dev = match_camera(name)
+    if dev is not None:
+        return dev["index"]
+    want = name.strip()
     return int(want) if want.isdigit() else None
+
+
+def match_camera(name: str, cams: list[dict] | None = None) -> dict | None:
+    want = name.strip().lower()
+    if not want or want.isdigit():
+        return None
+    for c in (list_cameras() if cams is None else cams):
+        if want in c["name"].lower():
+            return c
+    return None
+
+
+def verify_camera(dev: dict) -> str | None:
+    """After opening index ``dev['index']``: None if that index is still the device we matched
+    (same uniqueID in a fresh list AND in this process's list, which OpenCV uses), else why not."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        fresh = {c["index"]: c["id"] for c in _avf_fresh()}
+        mine = {c["index"]: c["id"] for c in _avf_in_process()}
+    except Exception as e:  # noqa: BLE001
+        return f"cannot check which camera opened ({e})"
+    if fresh.get(dev["index"]) != dev["id"]:
+        return camera_missing_text(dev["name"])
+    if mine.get(dev["index"]) != dev["id"]:
+        return "macOS camera list in this process is out of date; restart fpv-vision"
+    return None
 
 
 def camera_backend() -> int:
@@ -396,6 +469,12 @@ class VideoSource:
         return st
 
     # -- internals
+    def _clear_frame(self) -> None:
+        """Disconnected: drop the last frame so detection, snapshots and reports stop."""
+        with self._lock:
+            self._frame = None
+        self.fps_in = self.fps_unique = 0.0
+
     def _publish(self, frame: np.ndarray, ts: float | None = None) -> None:
         if self.crop:
             h, w = frame.shape[:2]
@@ -570,13 +649,21 @@ class VideoSource:
     def _open_live(self) -> cv2.VideoCapture:
         kind, target = self.spec.kind, self.spec.target
         if kind in ("camera", "uvc"):
-            if kind == "camera":
-                dev = resolve_camera(target)
-                if dev is None:
-                    raise RuntimeError(f"no camera matching '{target}' (check it is connected / unlocked)")
-            else:
-                dev = int(target) if target.isdigit() else target
+            self._cam_match = None
+            if kind == "camera" and not target.strip().isdigit():
+                # re-enumerate on EVERY open/reconnect; a missing name never falls back to an index
+                match = match_camera(target)
+                if match is None:
+                    raise CameraNotConnected(camera_missing_text(target))
+                self._cam_match, dev = match, match["index"]
+            else:  # an explicit index (camera:0, uvc:0) or a device path
+                dev = int(target) if target.strip().isdigit() else target
             cap = cv2.VideoCapture(dev, camera_backend())
+            if self._cam_match is not None and cap.isOpened():
+                why = verify_camera(self._cam_match)
+                if why:
+                    cap.release()
+                    raise CameraNotConnected(why)
             if sys.platform != "darwin":
                 # UVC capture cards (e.g. MS2109/MS2130 HDMI->USB) only reach 1080p30/60 as MJPEG;
                 # raw YUY2 at 1080p needs more USB bandwidth and more CPU. On macOS AVFoundation
@@ -614,6 +701,7 @@ class VideoSource:
                 cap = self._open_live()
             except Exception as e:  # noqa: BLE001 - keep retrying, show the error in the UI
                 self.connected, self.error = False, str(e)
+                self._clear_frame()  # nothing downstream may keep using the last picture
                 log.warning("source %s: %s (retry in %.0fs)", self.spec.raw, e, backoff)
                 if self._wait_or_stop(backoff):
                     return
@@ -654,6 +742,7 @@ class VideoSource:
                     n, u, t_window = 0, 0, ts
             cap.release()
             self.connected = False
+            self._clear_frame()
             if not self._stop.is_set():
                 log.warning("source %s: %s — reconnecting", self.spec.raw, self.error)
                 if self._wait_or_stop(backoff):

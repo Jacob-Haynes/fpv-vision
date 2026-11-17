@@ -155,6 +155,9 @@ class Service:
             if snap is None:
                 return {"ok": False, "error": f"snapshot {snapshot} not found"}
         else:
+            src = self.pipeline.source
+            if src.spec.is_live and not src.connected:
+                return {"ok": False, "error": f"{src.error or 'camera not connected'}: no picture to report"}
             snap = self.pipeline.take_snapshot(note="spot report")
             if snap is None:
                 return {"ok": False, "error": "no video frame yet"}
