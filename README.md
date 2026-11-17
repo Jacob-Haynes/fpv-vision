@@ -194,7 +194,11 @@ video hacks) is deliberately not used.
   - Put the camera in **Video mode, not recording**. Keep it on external power: the battery
     drains fast with HDMI out and the screen on.
 - **Measured on the Drone-ops Mac:** HERO4 set to 1080p30 → micro-HDMI → Guermok "USB3 Video"
-  (AVFoundation index 1, so `camera:USB3 Video`). It gives a clean feed with no OSD in frame.
+  (`camera:USB3 Video`). It gives a clean feed with no OSD in frame. **Select the card by name,
+  not by index:** its AVFoundation index differs per Mac (1 on the Drone-ops Mac, 0 on the HQ
+  M4 Max, where it lists as "Guermok USB3 Video") and changes with what else is plugged in. The
+  name match is a case-insensitive substring, so `camera:USB3 Video` finds it on both;
+  `--list-cameras` shows the names.
   **The card always outputs 1920×1080 @ 60 fps, but only 30 of those are real**; every second
   frame is a copy. fpv-vision **drops padded duplicates** before inference. It compares each
   frame with the previous one on a strided full-resolution sample (`FPV_DEDUP_THRESHOLD`,
@@ -499,7 +503,10 @@ Pi sources:
 - **Adaptive frame-skip:** the detector always takes the newest frame. The overlay is drawn on
   every frame with the latest boxes. If the overlay drops below 85% of its target, the detector
   backs off.
-- **Counting:** "unique" counts ByteTrack IDs seen at least 3 times. There is no
+- **Counting:** "seen" counts unique ByteTrack IDs seen at least 3 times. Each track keeps one
+  class for its life, a confidence-weighted vote over all its detections, so a van flickering
+  truck/bus/train is one truck. Bus and train are only shown when the voted confidence is at
+  least 0.6; otherwise they count as truck. There is no
   re-identification, so a person who leaves and comes back counts again, and a looping replay
   counts again every loop. Use **Reset counts**.
 - **Limits worth teaching:**
@@ -529,6 +536,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_INFER_MAX_WIDTH` | 1280 | downscale big frames before inference |
 | `FPV_CONF` / `FPV_ALL_CLASSES` | 0.30 / 0 | |
 | `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 20 / 960 / 75 | (30 / 1280 via run-laptop.sh) |
+| `FPV_HUD` | 0 | debug text (model, fps, time) burned into the video; also a toggle under Details. The SIM/REC/LIVE badge is always drawn |
 | `FPV_ALLOW_SCREEN` / `FPV_REQUEST_CAMERA` | 1 on macOS / 1 | screen source; macOS camera prompt |
 | `FPV_DATA_DIR` | `/var/lib/fpv-vision` or `./data` | snapshots, clips, models, analysis |
 | `FPV_CALLSIGN` / `FPV_DEFAULT_POSITION` | `FPV-VISION` / – | spot reports (position falls back to `SENSOR_LAT`/`SENSOR_LON`) |

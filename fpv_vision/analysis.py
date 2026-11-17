@@ -143,7 +143,7 @@ class AnalysisJob:
                 break
             t = idx / fps
             dets = detector.detect(frame)
-            counter.update(dets)
+            dets = counter.update(dets)
             sec = int(t)
             b = bucket.setdefault(sec, {"t": round(offset + sec, 1), "file": name, "file_t": sec,
                                         "person": 0, "vehicle": 0, "other": 0})

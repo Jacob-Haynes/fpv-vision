@@ -34,36 +34,75 @@ log = logging.getLogger(__name__)
 MIN_TRACK_HITS = 3  # a track must be seen this many times before it is counted
 
 
+RARE_CLASSES = {"bus", "train"}  # easily confused with a van/lorry from the air or through glass
+RARE_MIN_CONF = 0.6  # below this voted confidence, a bus/train is reported as a truck
+FOLD_TO = (7, "truck")
+
+
+def _fold(label: str, cls_id: int, conf: float) -> tuple[int, str]:
+    if label in RARE_CLASSES and conf < RARE_MIN_CONF:
+        return FOLD_TO
+    return cls_id, label
+
+
 class TrackCounter:
-    """Unique-object counts using tracker IDs, so one person walking through is counted once."""
+    """Unique-object counts using tracker IDs, so one person walking through is counted once.
+
+    Each track gets ONE class for its whole life: a confidence-weighted majority vote over every
+    detection of it (a white van flickering truck/bus/train stays one truck). Bus and train are only
+    kept when their voted mean confidence is at least ``RARE_MIN_CONF``; otherwise they fold into
+    truck. ``totals`` counts unique track IDs by voted class, so class flips never add to "seen".
+    """
 
     def __init__(self, min_hits: int = MIN_TRACK_HITS):
         self.min_hits = min_hits
         self._hits: dict[int, int] = defaultdict(int)
-        self._label: dict[int, str] = {}
+        self._votes: dict[int, dict[str, list]] = {}  # track -> label -> [conf sum, n, cls_id]
         self._counted: set[int] = set()
-        self.totals: dict[str, int] = defaultdict(int)
         self.untracked_peak: dict[str, int] = defaultdict(int)
 
-    def update(self, dets: list[Detection]) -> None:
+    def voted(self, track_id: int) -> tuple[int, str, float]:
+        """(cls_id, label, mean confidence) of a track's winning class, after the bus/train fold."""
+        votes = self._votes[track_id]
+        label, (total, n, cls_id) = max(list(votes.items()), key=lambda kv: kv[1][0])
+        mean = total / n
+        cls_id, label = _fold(label, cls_id, mean)
+        return cls_id, label, mean
+
+    def update(self, dets: list[Detection]) -> list[Detection]:
+        """Record this frame's detections; return them relabelled with each track's voted class."""
         untracked: dict[str, int] = defaultdict(int)
+        out = []
         for d in dets:
             if d.track_id is None:
-                untracked[d.label] += 1
+                cls_id, label = _fold(d.label, d.cls_id, d.conf)
+                untracked[label] += 1
+                out.append(Detection(cls_id, label, d.conf, d.xyxy, None) if label != d.label else d)
                 continue
             self._hits[d.track_id] += 1
-            self._label.setdefault(d.track_id, d.label)
+            v = self._votes.setdefault(d.track_id, {}).setdefault(d.label, [0.0, 0, d.cls_id])
+            v[0] += d.conf
+            v[1] += 1
             if d.track_id not in self._counted and self._hits[d.track_id] >= self.min_hits:
                 self._counted.add(d.track_id)
-                self.totals[self._label[d.track_id]] += 1
-        for k, v in untracked.items():
-            self.untracked_peak[k] = max(self.untracked_peak[k], v)
+            cls_id, label, _ = self.voted(d.track_id)
+            out.append(d if label == d.label else Detection(cls_id, label, d.conf, d.xyxy, d.track_id))
+        for k, n in untracked.items():
+            self.untracked_peak[k] = max(self.untracked_peak[k], n)
+        return out
+
+    @property
+    def totals(self) -> dict[str, int]:
+        t: dict[str, int] = defaultdict(int)
+        for tid in list(self._counted):  # read from the web thread while detect updates
+            t[self.voted(tid)[1]] += 1
+        return dict(t)
 
     def reset(self) -> None:
         self.__init__(self.min_hits)
 
     def snapshot(self) -> dict[str, int]:
-        return dict(self.totals)
+        return self.totals
 
 
 @dataclass
@@ -146,6 +185,7 @@ class Pipeline:
         self.detector = detector
         self.source = source
         self.counter = TrackCounter()
+        self.running = True  # False = Stop pressed: no detection, stream holds the last frame
         self.stats = PipelineStats()
         self.recorder = Recorder(settings.clips_dir, settings.max_clip_seconds)
         self._stop = threading.Event()
@@ -211,6 +251,9 @@ class Pipeline:
         gap = 0.0
         n, t_window, frames_at_window = 0, time.time(), 0
         while not self._stop.is_set():
+            if not self.running:
+                time.sleep(0.05)
+                continue
             src = self.source
             fid, frame, fts = src.latest()
             if frame is None or fid == last_id:
@@ -227,7 +270,7 @@ class Pipeline:
             dt = time.perf_counter() - t0
             if src is not self.source:  # source switched mid-inference
                 continue
-            self.counter.update(dets)
+            dets = self.counter.update(dets)  # one voted class per track
             with self._lock:
                 self._dets = dets
                 self._dets_frame_shape = frame.shape[:2]
@@ -263,6 +306,9 @@ class Pipeline:
             now = time.time()
             if now < next_t:
                 time.sleep(next_t - now)
+            if not self.running:
+                time.sleep(0.05)
+                continue
             src = self.source
             fid, frame, fts = src.latest()
             if frame is None or fid == last_id:
@@ -286,7 +332,8 @@ class Pipeline:
             ]
             if counts:
                 hud.append("  ".join(f"{k}:{v}" for k, v in sorted(counts.items())))
-            annotate.draw(out, dets, hud, recording=self.recorder.active, badge=self._badge(src))
+            annotate.draw(out, dets, hud if self.settings.show_hud else None, recording=self.recorder.active,
+                          badge=self._badge(src))
             t_enc = time.time()
             jpeg = annotate.encode_jpeg(out, self.settings.jpeg_quality)
             done = time.time()

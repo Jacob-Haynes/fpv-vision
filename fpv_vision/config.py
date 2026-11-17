@@ -74,6 +74,7 @@ class Settings:
     port: int = 8110
     stream_width: int = 960
     jpeg_quality: int = 75
+    show_hud: bool = False  # debug text (model, fps, time) burned into the video; the provenance badge is always drawn
 
     # --- replay / footage library ---
     footage_dirs: str = "~/Movies/FPV"  # os.pathsep-separated dirs listed in the UI's footage picker
@@ -157,6 +158,7 @@ class Settings:
         s.port = _env_int("FPV_PORT", s.port)
         s.stream_width = _env_int("FPV_STREAM_WIDTH", s.stream_width)
         s.jpeg_quality = _env_int("FPV_JPEG_QUALITY", s.jpeg_quality)
+        s.show_hud = _env_bool("FPV_HUD", s.show_hud)
         if _env("FPV_DATA_DIR"):
             s.data_dir = Path(_env("FPV_DATA_DIR"))
         s.footage_dirs = _env("FPV_FOOTAGE_DIRS", s.footage_dirs)

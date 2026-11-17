@@ -179,6 +179,15 @@ def create_app(service) -> FastAPI:
             raise HTTPException(400, "seconds must be a number")
         return {"periodic_seconds": service.set_periodic(seconds), "enabled": service.describer.enabled}
 
+    @app.post("/api/run")
+    async def run(body: dict = Body(...)):
+        return service.set_running(bool(body.get("on", True)))
+
+    @app.post("/api/hud")
+    async def hud(body: dict = Body(...)):
+        settings.show_hud = bool(body.get("on", False))
+        return {"hud": settings.show_hud}
+
     @app.post("/api/record/start")
     async def record_start():
         path = service.pipeline.recorder.start(service.pipeline.stats.render_fps or settings.target_fps)

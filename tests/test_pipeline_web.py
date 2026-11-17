@@ -57,6 +57,26 @@ def test_track_counter_counts_unique_tracks_once():
     assert c.snapshot() == {}
 
 
+def test_track_class_is_voted_once_per_track():
+    """A white van flickering truck/bus/train is one truck: one class per track, seen once."""
+    c = TrackCounter(min_hits=3)
+    van = [("truck", 7, 0.55), ("bus", 5, 0.5), ("train", 6, 0.45), ("truck", 7, 0.6), ("bus", 5, 0.4),
+           ("truck", 7, 0.5), ("train", 6, 0.3), ("bus", 5, 0.45)]
+    for label, cls_id, conf in van:
+        out = c.update([Detection(cls_id, label, conf, (0, 0, 9, 9), 11)])
+    assert c.snapshot() == {"truck": 1}
+    assert out[0].label == "truck" and out[0].cls_id == 7  # boxes and "in view" use the voted class too
+
+    # a low-confidence bus wins the vote but is folded into truck; a confident bus stays a bus
+    for _ in range(5):
+        c.update([Detection(5, "bus", 0.5, (0, 0, 9, 9), 12), Detection(5, "bus", 0.8, (0, 0, 9, 9), 13)])
+    assert c.snapshot() == {"truck": 2, "bus": 1}
+    assert sum(c.snapshot().values()) == 3  # "seen" = unique track IDs
+
+    # untracked low-confidence train is shown as a truck
+    assert c.update([Detection(6, "train", 0.4, (0, 0, 9, 9), None)])[0].label == "truck"
+
+
 def test_local_summary():
     dets = FakeDetector().detect(__import__("numpy").zeros((540, 960, 3), "uint8"))
     text = summary.describe(dets, 960)

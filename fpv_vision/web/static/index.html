@@ -18,7 +18,19 @@
   .fv-video.cropping { cursor: crosshair; }
   .fv-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
   .fv-full { width: 100%; }
+  [hidden] { display: none !important; }
   .fv-side select { width: 100%; margin-bottom: 10px; }
+  .fv-state { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .fv-side .isr-card { padding: 12px 14px; }
+  .fv-form label { margin: 6px 0 3px; }
+  #counts li { padding: 4px 0; }
+  #counts .isr-big { font-size: 24px; }
+  .fv-side .fv-msg { min-height: 0; margin-top: 4px; }
+  .fv-side .fv-msg:empty { display: none; }
+  #summary { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 14px; }
+  .fv-inline { display: flex; gap: 8px; }
+  .fv-inline input { flex: 1; min-width: 0; }
+  .fv-side details.isr-more { margin-top: 6px; }
   #replayBar { display: none; }
   #replayBar input[type=range] { flex: 1 1 200px; min-height: 0; padding: 0; accent-color: var(--muted); }
   #counts li { align-items: center; }
@@ -31,7 +43,7 @@
   .fv-snap.sel { border-color: var(--accent); }
   .fv-snap img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
   .fv-snap div { padding: 6px 10px; }
-  .fv-form label { display: block; margin: 10px 0 4px; }
+  .fv-form label { display: block; }
   .fv-form input[type=text] { width: 100%; }
   .fv-form input[type=checkbox] { min-height: 0; }
   .fv-kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0 16px; }
@@ -80,6 +92,8 @@
       <div class="isr-card">
         <h2>Source</h2>
         <select id="srcSelect" aria-label="Video source"></select>
+        <div class="fv-state"><span id="srcState" class="isr-mono"></span>
+          <button class="isr-btn" id="btnStop">Stop</button></div>
         <button class="isr-btn primary fv-full" id="btnGo">Start</button>
         <div class="fv-msg isr-muted" id="srcMsg"></div>
       </div>
@@ -87,34 +101,33 @@
         <h2>In view</h2>
         <ul class="isr-list" id="counts"></ul>
       </div>
+      <div class="isr-card">
+        <h2>Scene</h2>
+        <div id="summary">No description yet.</div>
+        <div class="isr-muted" id="summaryMeta"></div>
+      </div>
+      <div class="isr-card fv-form">
+        <h2>Spot report</h2>
+        <label for="pos" class="isr-muted">Grid (MGRS)</label>
+        <input type="text" id="pos" class="isr-grid-ref" placeholder="e.g. 15T WG 00000 49776" autocomplete="off">
+        <label for="activity" class="isr-muted">Activity</label>
+        <div class="fv-inline"><input type="text" id="activity" placeholder="e.g. 2 pax loading vehicle">
+          <button class="isr-btn" id="btnSpot">Send</button></div>
+        <div class="fv-msg isr-mono" id="spotMsg"></div>
+        <details class="isr-more">
+          <summary>Details</summary>
+          <label for="posLatLon">Or lat, lon (used instead of the grid if filled in)</label>
+          <input type="text" id="posLatLon" class="isr-mono" placeholder="e.g. 42.0, -93.0" autocomplete="off">
+          <label for="unit">Unit</label>
+          <input type="text" id="unit" value="unk">
+          <div class="fv-row">
+            <label><input type="checkbox" id="sendCot" checked> Send to TAK</label>
+            <label><input type="checkbox" id="sendMesh" checked> Send on mesh</label>
+          </div>
+          <p id="selSnap">Uses a fresh snapshot. Tap a snapshot below to use that one.</p>
+        </details>
+      </div>
     </aside>
-  </div>
-
-  <div class="isr-grid fv-below">
-    <div class="isr-card">
-      <h2>Scene</h2>
-      <div id="summary">No description yet.</div>
-      <div class="isr-muted" id="summaryMeta"></div>
-    </div>
-    <div class="isr-card fv-form">
-      <h2>Spot report</h2>
-      <label for="pos" class="isr-muted">Location (grid or lat, lon)</label>
-      <input type="text" id="pos" placeholder="15T WG 00000 49776">
-      <label for="activity" class="isr-muted">Activity</label>
-      <input type="text" id="activity" placeholder="2 pax loading vehicle">
-      <div class="fv-row"><button class="isr-btn" id="btnSpot">Send report</button></div>
-      <div class="fv-msg isr-mono" id="spotMsg"></div>
-      <details class="isr-more">
-        <summary>Details</summary>
-        <label for="unit">Unit</label>
-        <input type="text" id="unit" value="unk">
-        <div class="fv-row">
-          <label><input type="checkbox" id="sendCot" checked> Send to TAK</label>
-          <label><input type="checkbox" id="sendMesh" checked> Send on mesh</label>
-        </div>
-        <p id="selSnap">Uses a fresh snapshot. Tap a snapshot below to use that one.</p>
-      </details>
-    </div>
   </div>
 
   <div class="isr-card fv-below">
@@ -142,6 +155,7 @@
       <button class="isr-btn" id="btnCropClear">Clear crop</button>
       <button class="isr-btn" id="btnReset">Reset counts</button>
     </div>
+    <div class="fv-row"><label><input type="checkbox" id="hudToggle"> Show debug text on the video (model, fps, time)</label></div>
 
     <h2 class="isr-section">Scene description</h2>
     <div class="fv-kv" id="sceneInfo"></div>
@@ -185,7 +199,7 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let selectedSnap = null, lastStatus = null, galleryKey = "", clipsKey = "", scrubbing = false, picked = false;
-let cropMode = false, cropStart = null, jobId = null, jobTimer = null, lastJob = null, footage = [];
+let posTouched = false, cropMode = false, cropStart = null, jobId = null, jobTimer = null, lastJob = null, footage = [];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ago = (ts) => { const s = Math.round(Date.now() / 1000 - ts); return s < 60 ? `${s} s ago` : `${Math.round(s / 60)} min ago`; };
 const mmss = (t) => `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -248,7 +262,7 @@ function renderStatus(s) {
 
   const labels = [...new Set([...Object.keys(s.counts), ...Object.keys(s.totals)])]
     .sort((a, b) => (s.counts[b] || 0) - (s.counts[a] || 0) || a.localeCompare(b));
-  $("counts").innerHTML = labels.map(l => `<li><span class="name">${esc(l)}</span>
+  $("counts").innerHTML = labels.slice(0, 4).map(l => `<li><span class="name">${esc(l)}</span>
       <span class="isr-big">${pad(s.counts[l] || 0)}</span><span class="isr-muted isr-mono">${s.totals[l] || 0} seen</span></li>`).join("")
     || `<li class="isr-muted">Nothing in view</li>`;
 
@@ -266,7 +280,8 @@ function renderStatus(s) {
   $("btnRec").textContent = rec.active ? "Stop recording" : "Record";
   $("btnRec").classList.toggle("danger", rec.active);
   $("recInfo").textContent = rec.active ? `${rec.seconds} s` : "";
-  if (!$("pos").value && s.default_position) $("pos").value = s.default_position;
+  if (!$("pos").value && !posTouched && s.default_grid) $("pos").value = s.default_grid;
+  if (document.activeElement !== $("hudToggle")) $("hudToggle").checked = !!s.hud;
 
   // Details
   kv($("perf"), [["Video", `${st.render_fps || 0} fps`], ["Detections", `${st.detect_fps || 0} per second`],
@@ -325,14 +340,22 @@ function setSelect(spec) {
   const sel = $("srcSelect");
   if ([...sel.options].some(o => o.value === spec)) sel.value = spec;
 }
+function sourceState(s) {
+  const src = s.source;
+  if (!s.running || (src.replay_state && src.replay_state.paused)) return "Stopped";
+  if (!src.connected) return "No signal";
+  const kind = /\/samples\//.test(src.spec) || src.kind === "simulate" || src.kind === "synthetic" ? "Simulated" : src.kind === "replay" ? "Clip" : "Live";
+  return `${kind} · ${Math.round(src.live ? src.fps_unique : src.fps_in)} fps`;
+}
 function updateGo() {
-  const s = lastStatus, b = $("btnGo");
+  const s = lastStatus;
   if (!s) return;
-  const same = $("srcSelect").value === s.source.spec, rp = s.source.replay_state;
-  b.disabled = false; b.title = "";
-  if (!same) b.textContent = "Start";
-  else if (rp) b.textContent = rp.paused ? "Start" : "Stop";
-  else { b.textContent = "Running"; b.disabled = true; b.title = "This source is already running. Pick another one to switch."; }
+  const same = $("srcSelect").value === s.source.spec, state = sourceState(s), stopped = state === "Stopped";
+  $("srcState").textContent = state;
+  // Start is the one primary action only when there is something to start: stopped, or another source picked
+  $("btnGo").hidden = same && !stopped;
+  $("btnGo").textContent = same ? "Start" : "Start this source";
+  $("btnStop").hidden = stopped;
 }
 async function switchSource(spec) {
   say($("srcMsg"), "Starting…");
@@ -342,10 +365,11 @@ async function switchSource(spec) {
 $("srcSelect").onchange = () => { picked = true; updateGo(); };
 $("btnGo").onclick = () => {
   const s = lastStatus, spec = $("srcSelect").value;
-  if (s && spec === s.source.spec && s.source.replay_state)
-    return api("/api/replay", { action: "pause", value: !s.source.replay_state.paused }).then(poll);
+  if (s && spec === s.source.spec) return api("/api/run", { on: true }).then(poll);
   switchSource(spec);
 };
+$("btnStop").onclick = () => api("/api/run", { on: false }).then(poll);
+$("hudToggle").onchange = () => api("/api/hud", { on: $("hudToggle").checked }).catch(() => {});
 $("btnSrcCustom").onclick = () => $("srcCustom").value.trim() && switchSource($("srcCustom").value.trim());
 
 // ---------------------------------------------------------------- replay controls
@@ -499,7 +523,7 @@ $("periodic").onchange = () => api("/api/periodic", { seconds: Number($("periodi
 $("btnSpot").onclick = async () => {
   $("btnSpot").disabled = true;
   try {
-    const r = await api("/api/spot-report", { position: $("pos").value, activity: $("activity").value, unit: $("unit").value,
+    const r = await api("/api/spot-report", { position: $("posLatLon").value.trim() || $("pos").value, activity: $("activity").value, unit: $("unit").value,
       snapshot: selectedSnap, send_cot: $("sendCot").checked, send_mesh: $("sendMesh").checked });
     const parts = [`Grid ${r.report.grid}.`];  // shown in .isr-mono
     if (r.cot) parts.push(r.cot.queued ? (r.cot.registered ? "Sent to TAK." : "TAK queued, sends when connected.") : "Not sent to TAK (TAK is off or busy).");
@@ -508,6 +532,7 @@ $("btnSpot").onclick = async () => {
   } catch (e) { say($("spotMsg"), `Report not sent: ${e.message}.`, false); }
   finally { $("btnSpot").disabled = false; }
 };
+$("pos").addEventListener("input", () => { posTouched = true; });
 $("video").onerror = () => setTimeout(() => { $("video").src = "/stream.mjpg?t=" + Date.now(); }, 1500);
 
 async function poll() {

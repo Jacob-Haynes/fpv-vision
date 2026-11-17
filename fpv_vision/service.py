@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from fpv_vision import cot, sources, spotrep, summary
+from fpv_vision import cot, geo, sources, spotrep, summary
 from fpv_vision.detector import Detection
 from fpv_vision.gemini import RateLimited
 from fpv_vision.mesh import MeshBus
@@ -197,6 +197,25 @@ class Service:
             return f"{lat:.6f}, {lon:.6f}"
         return ""
 
+    def default_grid(self) -> str:
+        """The default position as a spaced MGRS grid (British usage), or "" if none or unparseable."""
+        pos = self.default_position()
+        if not pos:
+            return ""
+        try:
+            lat, lon = geo.parse_position(pos)
+            return geo.format_mgrs(geo.to_mgrs(lat, lon))
+        except (ValueError, geo.PositionError):
+            return ""
+
+    def set_running(self, on: bool) -> dict:
+        """Stop/start detection and the stream (the source stays open; a clip is paused too)."""
+        self.pipeline.running = bool(on)
+        src = self.pipeline.source
+        if src.is_replay:
+            src.pause(not on)
+        return {"ok": True, "running": self.pipeline.running}
+
     @staticmethod
     def provenance_of(snap: dict) -> str:
         if snap.get("provenance") in ("live", "simulated", "recorded"):
@@ -260,6 +279,7 @@ class Service:
         src = make_source(spec, self.settings)
         self.pipeline.switch_source(src)
         self.pipeline.counter.reset()
+        self.pipeline.running = True
         return {"ok": True, "source": src.spec.raw}
 
     def replay_control(self, action: str, value=None) -> dict:
@@ -374,6 +394,7 @@ class Service:
             "totals": p.counter.snapshot(),
             "live_summary": summary.describe(dets, shape[1] or 1) if shape[1] else "",
             "last_summary": self.last_summary,
+            "hud": self.settings.show_hud,
             "recording": {"active": rec.active, "file": rec.path.name if rec.path else None,
                           "seconds": round(time.time() - rec.started) if rec.active else 0,
                           "max_seconds": rec.max_seconds},
@@ -383,6 +404,8 @@ class Service:
             "heartbeat": self.heartbeat(),
             "camera_permission": sources.camera_permission_status(),
             "default_position": self.default_position(),
+            "default_grid": self.default_grid(),
+            "running": self.pipeline.running,
             "callsign": self.settings.callsign,
             "reports": self.reports[:5],
             "jobs": [j.to_dict(full=False) for j in list(self.jobs.values())[-3:]],

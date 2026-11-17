@@ -15,3 +15,10 @@ def test_overlay_uses_kit_palette_only():
     assert not ((g > 150) & (r < 90) & (b < 90)).any()  # no saturated green
     hot = annotate.draw(np.zeros_like(img), dets, alert_tracks={7})
     assert tuple(hot[250, 100]) == annotate.HOSTILE and tuple(hot[400, 500]) == annotate.UNKNOWN
+
+
+def test_hud_off_draws_no_debug_text():
+    blank = np.zeros((360, 640, 3), np.uint8)
+    out = annotate.draw(blank.copy(), [], None, recording=True)
+    assert not out[:60, :300].any()  # top-left is untouched when the HUD is off
+    assert annotate.draw(blank.copy(), [], ["FPV-VISION"])[:60, :300].any()

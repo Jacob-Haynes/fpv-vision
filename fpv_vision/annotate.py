@@ -74,8 +74,8 @@ def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
         _tag(img, x1, ty - th - 5, x1 + tw + 6, ty)
         cv2.putText(img, tag, (x1 + 3, ty - 3), FONT, fs, TEXT, 1, cv2.LINE_AA)
 
-    lines = list(hud or [])
-    lines.append(time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime()))
+    # hud=None: no debug text at all (the default for the live stream); a list adds a UTC time line
+    lines = [] if hud is None else [*hud, time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime())]
     y = 8
     for line in lines:
         (tw, th), _ = cv2.getTextSize(line, FONT, fs, 1)
@@ -89,7 +89,7 @@ def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
         cv2.rectangle(img, (x0, 8), (w - 6, 16 + th), _badge_colour(badge), 1)
         cv2.putText(img, badge, (x0 + 4, 12 + th), FONT, fs, TEXT, 1, cv2.LINE_AA)
     if recording and int(time.time() * 2) % 2 == 0:
-        cv2.circle(img, (w - 20, 30 + int(th if badge else 10)), 6, FAULT, -1)
+        cv2.circle(img, (w - 20, 44), 6, FAULT, -1)
     return img
 
 
