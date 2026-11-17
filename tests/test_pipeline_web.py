@@ -235,10 +235,10 @@ def test_null_detector_pipeline_streams(settings):
         p.stop()
 
 
-# sha256 of ui-kit v2 (isr-ui.css, isr-ui.js, fonts/): the served copies must be the kit files, unchanged
+# sha256 of ui-kit v3 (pi-profiles 1ee86d2) (isr-ui.css, isr-ui.js, fonts/): the served copies must be the kit files, unchanged
 ISR_UI_SHA256 = {
-    "isr-ui.css": "ed601e0494d7b8c93f246205d53a03916b15ceb7eb3a54526a6cd4a447879ec7",
-    "isr-ui.js": "191f2b6dce0c52a760a8fdeddf4d5f127399d7d3e1684dcc26a5dbe78874d274",
+    "isr-ui.css": "287c3df0938d25c25b04b751007095c3cf08e1df0e2689d3dd8df8b3e9eb832c",
+    "isr-ui.js": "79a61cb2a427302e45b62cbebe2d022eff2dcd0549df5edea77b13a6b478fe7d",
     "fonts/barlow-condensed-500.woff2": "31ff5e6e96a096fde4d78bc838719e69b093db2d0b062b96e423c065a6d1b2b1",
     "fonts/barlow-condensed-600.woff2": "5bc49d41f32810a114765314392332ce2acae2276635eee265a50319a12c1b49",
     "fonts/ibm-plex-mono-400.woff2": "52de70091213c9eab340e2a7ac59e7b6b2b94e089bf69ef38479b22cfde4274c",
@@ -253,10 +253,10 @@ def test_page_uses_shared_isr_ui_kit(app_client):
 
     client, _ = app_client
     html = client.get("/").text
-    assert '<link rel="stylesheet" href="/isr-ui.css?v=2">' in html and '<script src="/isr-ui.js?v=2"></script>' in html
+    assert '<link rel="stylesheet" href="/isr-ui.css?v=3">' in html and '<script src="/isr-ui.js?v=3"></script>' in html
     for name, sha in ISR_UI_SHA256.items():
         r = client.get("/" + name)
         assert r.status_code == 200 and hashlib.sha256(r.content).hexdigest() == sha, name
-    assert "text/css" in client.get("/isr-ui.css?v=2").headers["content-type"]
+    assert "text/css" in client.get("/isr-ui.css?v=3").headers["content-type"]
     assert client.get("/fonts/ibm-plex-mono-400.woff2").headers["content-type"] == "font/woff2"
     assert client.get("/fonts/..%2F..%2Fapp.py").status_code == 404
