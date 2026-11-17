@@ -593,7 +593,7 @@ a person or vehicle.
 ## Air watch (off: air detection belongs to OP sentry)
 
 FPV vision is a drone looking at the ground, so it doesn't look for aircraft. Drones, helicopters,
-aeroplanes and birds are OP sentry's job, the static defensive camera, and the six air clips
+aeroplanes and birds are OP sentry's job, the static defensive camera, and the air clips
 (`~/Desktop/ISR-demo/air-clips`) belong to it. The code below is kept but never offered in the
 UI: no tickbox, no air tracks in In view, no Mark hostile. It only runs with `FPV_AIR=1`, and
 YOLOE and its text encoder are only downloaded or loaded then (`--setup-only` skips them
@@ -647,7 +647,7 @@ describes scenes. On the drone-ops Mac, which runs its own Ollama, use
 - **Renamed tracks:** a track first sent as a helicopter or aeroplane and later named a drone sends
   a CoT update (same uid, new type) and a mesh alert.
 
-**Measured on the HQ M4 Max** on the six demo clips in `~/Desktop/ISR-demo/air-clips`
+**Measured on the HQ M4 Max** on the three air clips in `~/Desktop/ISR-demo/air-clips`
 (licences in `CREDITS.txt` there).
 
 - **Method:** played in real time at 10 passes per second, as the app does. AI naming used
@@ -659,23 +659,18 @@ describes scenes. On the drone-ops Mac, which runs its own Ollama, use
 | Clip (passes with the object) | Stock: hit / miss / wrong | Air watch + AI: hit / miss / wrong | Named by AI | First box → name | fps stock / air |
 |---|---|---|---|---|---|
 | 01 hexacopter climbing into sky (111) | 0 / 111 / 33 | **41** / 70 / 34 | drone · hexacopter | 7.9 s | 20 / 9 |
-| 02 small quadcopter over a field (338) | 0 / 338 / 34 | 8 / 330 / 62 | none (no box reached 0.7) | – | 43 / 22 |
-| 03 quadcopter, then an eagle (337) | 0 / 337 / 64 | **85** / 252 / 30 | drone · quadcopter | 3.5 s | 44 / 28 |
 | 04 helicopter (623) | 0 / 623 / 496 | **571** / 52 / 44 | helicopter · crewed rotorcraft (×2) | 3.6–3.7 s | 32 / 11 |
 | 05 airliner on approach (96) | 58 / 38 / 0 | 72 / 24 / 0 | none (both calls timed out at 10 s) | – | 11 / 4 |
-| 06 distant gulls (125) | 0 / 125 / 0 | 0 / 125 / 0 | none (birds are not sent) | – | 22 / 6 |
 
 **With `FPV_AIR_NAME_CONF=0.4`:**
-- More tracks get named. Clip 02's small drone is named "drone · quadcopter" on three tracks
-  (4.6–10.2 s), and the airliner "aeroplane · commercial airliner" (5.3 s).
+- More tracks get named: the airliner becomes "aeroplane · commercial airliner" (5.3 s).
 - Clip 01's first two calls timed out, so it was named only after 25 s.
 
 **Summary:**
-- The vision model names multirotors correctly (hexacopter, quadcopter) where YOLOE said
+- The vision model names the multirotor correctly (hexacopter) where YOLOE said
   "helicopter" or "aeroplane", and it agrees on the helicopter and the airliner.
 - Its limits are speed and gating. A name takes about 3–8 s while the GPU is shared, and
-  occasionally longer than the 10 s timeout. The 0.7 confidence gate skips small, distant drones.
-- Distant gulls are below what YOLOE sees, at any threshold.
+  occasionally longer than the 10 s timeout. The 0.7 confidence gate can skip small, distant drones.
 
 Without AI naming (stock YOLOE names only), every open-vocabulary model tried called multirotors
 "helicopter" or "aeroplane": YOLOE 26s/26m/26l/11l and YOLO-World v2 s/l/x.
