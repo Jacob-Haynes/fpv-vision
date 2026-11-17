@@ -65,7 +65,7 @@ class Settings:
     infer_max_width: int = 1280  # downscale bigger frames (4K/2.7K) before inference
     conf: float = 0.30
     device: str = "auto"  # auto = CUDA > Apple MPS > CPU
-    all_classes: bool = False  # False = ISR-relevant subset (people, vehicles, boats, aircraft)
+    all_classes: bool = False  # False = ISR-relevant subset (people, vehicles, boats)
     target_fps: float = 20.0  # adaptive frame-skip aims to keep the overlay at least this smooth
     detector: str = "yolo"  # yolo | none (stream only)
 
@@ -74,7 +74,7 @@ class Settings:
     port: int = 8110
     stream_width: int = 960
     jpeg_quality: int = 75
-    air: bool = False  # Air watch: open-vocabulary drone/helicopter/aeroplane/bird detector (FPV_AIR)
+    air: bool = False  # Air watch (FPV_AIR=1 only, never in the UI): air detection belongs to OP sentry
     air_fps: float = 10.0  # max Air watch passes per second (each pass = full frame + 2x2 tiles)
     air_name_conf: float = 0.7  # YOLOE confidence a track needs before the vision model is asked to name it
     search: bool = False  # Search: ground detector on tiles for small, distant people/vehicles (FPV_SEARCH)

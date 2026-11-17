@@ -182,6 +182,7 @@ def test_search_toggle_replaces_the_normal_pass(client):
 def test_search_and_air_watch_together_cap_the_air_rate(client, settings):
     c, svc, _ = client
     settings.air_fps, settings.search_air_fps = 30, 2
+    settings.air = True  # FPV_AIR=1 (never in the UI)
 
     class Air:
         name = "air"

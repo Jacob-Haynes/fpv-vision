@@ -125,7 +125,11 @@ class Service:
         return air.AirDetector(self.settings.models_dir, select_device(self.settings.device))
 
     def set_air(self, on: bool) -> dict:
-        """Turn Air watch on/off. The model loads on first use (a second or two)."""
+        """Turn Air watch on/off. Only with FPV_AIR=1: air detection belongs to OP sentry, so FPV
+        vision never offers it in the UI and never loads YOLOE otherwise. The model loads on first use."""
+        if on and not self.settings.air:
+            self.air_error = "Air watch is off in FPV vision (air detection is OP sentry's); set FPV_AIR=1"
+            return {"ok": False, "air": False, "error": self.air_error}
         if on and self.pipeline.air is None:
             try:
                 self.pipeline.air = self.air_factory()
@@ -221,6 +225,8 @@ class Service:
 
     def mark_air(self, track: int, hostile: bool) -> dict:
         """Operator marks an air track hostile (red box, hostile CoT for a drone) or clears it."""
+        if not self.settings.air:
+            return {"ok": False, "error": "Air watch is off in FPV vision; set FPV_AIR=1"}
         from fpv_vision import air
 
         tid = int(track) % air.TRACK_ID_OFFSET + air.TRACK_ID_OFFSET
@@ -237,6 +243,7 @@ class Service:
         p = self.pipeline
         dets = p.air_detections()
         return {
+            "enabled": self.settings.air,  # FPV_AIR=1; never offered in the UI
             "on": p.air_on, "loaded": p.air is not None,
             "available": p.air is not None or air.available(self.settings.models_dir),
             "error": self.air_error, "fps": p.air_stats["fps"], "ms": p.air_stats["ms"],

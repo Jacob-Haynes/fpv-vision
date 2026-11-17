@@ -168,6 +168,7 @@ class HeliThatIsADrone:
 def test_named_drone_retypes_cot_and_alerts_mesh(settings):
     settings.sensor_lat, settings.sensor_lon = 42.0, -93.0
     settings.air_fps = 30
+    settings.air = True  # FPV_AIR=1
     pipeline = Pipeline(settings, FakeDetector(), sources.VideoSource("synthetic")).start()
     tak, mesh = CotSender(enabled=False, station="t"), MeshBus(enabled=False)
     cot_sent, mesh_sent = [], []

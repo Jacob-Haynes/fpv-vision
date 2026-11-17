@@ -171,6 +171,9 @@ def prefetch(settings: Settings) -> int:
             print(f"model {model}: MISSING ({e})")
             return 1
     print(f"model {model}: {path} ({backend}, {device})")
+    if not settings.air:  # YOLOE + its 250 MB text encoder: only for FPV_AIR=1 (OP sentry does air detection)
+        print("air watch: skipped (air detection is OP sentry's; set FPV_AIR=1 to fetch it)")
+        return 0 if ok else 1
     from fpv_vision import air
 
     try:

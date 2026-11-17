@@ -20,8 +20,8 @@ log = logging.getLogger(__name__)
 # COCO class ids
 PERSON = {0}
 VEHICLES = {1, 2, 3, 5, 6, 7}  # bicycle, car, motorcycle, bus, train, truck
-WATERCRAFT_AIR = {4, 8}  # airplane, boat
-ISR_CLASSES = sorted(PERSON | VEHICLES | WATERCRAFT_AIR)
+WATERCRAFT = {8}  # boat (no aircraft: FPV looks at the ground; air detection is OP sentry's)
+ISR_CLASSES = sorted(PERSON | VEHICLES | WATERCRAFT)
 
 COCO_NAMES = {
     0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "aeroplane", 5: "bus",

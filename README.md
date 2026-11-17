@@ -65,6 +65,7 @@ scripts/run-laptop.sh                      # http://isr-droneops.local:8110
 `--setup-only` downloads the YOLO26s weights (19 MB) and both sample clips (about 9 MB each) into
 `~/Library/Application Support/isr-kit/fpv-vision`, and exits non-zero if anything is still
 missing. After that **no internet is needed**, so run it before demo day while online.
+It skips the Air watch model (YOLOE, about 300 MB with its text encoder) unless `FPV_AIR=1`.
 
 - Downloads retry with backoff (honouring `Retry-After` on HTTP 429) and send a descriptive
   User-Agent, as Wikimedia asks. The street clip falls back to a 360p transcode and the original
@@ -515,7 +516,7 @@ Pi sources:
   or `FPV_CPU_MODEL`. On CPU it prefers an NCNN export, then ONNX, then `.pt`
   (`python -m fpv_vision.export`). On GPU it uses `.pt`. Weights download once into
   `<data>/models`.
-- **Classes:** people, vehicles (bicycle, car, motorcycle, bus, train, truck), boats and aircraft.
+- **Classes:** people, vehicles (bicycle, car, motorcycle, bus, train, truck), and boats. No aircraft: FPV looks at the ground (see Air watch).
   Set `FPV_ALL_CLASSES=1` for all 80 COCO classes. People are drawn red, vehicles orange.
 - **Adaptive frame-skip:** the detector always takes the newest frame. The overlay is drawn on
   every frame with the latest boxes. If the overlay drops below 85% of its target, the detector
@@ -532,11 +533,75 @@ Pi sources:
   - motion blur;
   - COCO classes, which are everyday objects, not military vehicles or camouflage.
 
-## Air watch: drones, helicopters, aeroplanes, birds
+## Search: small, distant people and vehicles
+
+The normal detector squeezes the whole frame into one 640 px input, so a figure far off across
+open ground is a few pixels tall and is missed or comes and goes. **Search** (`FPV_SEARCH=1`, or
+the Search tickbox right under the source picker) runs the same weights on tiles instead:
+
+- **Tiling:** the full frame plus 2×2 overlapping tiles (15 %), or 3×3 when the source is 1440p
+  or more (`FPV_SEARCH_GRID`), in one batch. Boxes
+  cut by an inner tile edge are dropped, and the rest are merged with NMS within a group:
+  - car, bus, train and truck are one group, so a van called car in one tile and truck in
+    another stays one box;
+  - people, two-wheelers, boats and aircraft are groups of their own, so a person standing
+    against a vehicle is kept.
+- **Tracking and the hit gate:** ByteTrack, then a track is shown only after 2 passes in a row
+  (`FPV_SEARCH_HITS`). Confidence drops to 0.25 (`FPV_SEARCH_CONF`) to reach the faint ones; the
+  gate keeps one-off false positives off the screen. Counting and the class vote are as normal.
+- **In place of the normal pass:** while Search is on it replaces the normal detector, so
+  nothing is boxed twice. The pill shows "Search" and its rate.
+- **Where it fits:** it's for open ground. Use it when the targets are small and far off;
+  leave it off for close work, where the normal detector is faster.
+- **Cost:** one inference per tile, so the detection rate drops (table below).
+
+**Measured** on real DJI flight clips (1080p60, so 2×2 tiles), on the drone-ops M4 Pro, with
+yolo26s at 640 px. Detection ran at 10 passes per second of video so the trackers and the gate
+behave as they do live, and was scored at one frame per second. Every track's best crop was
+checked by eye. "Frames with a person" counts sampled frames with at least one correct person
+box. "False-positive frames" counts sampled frames with at least one box on something that isn't
+a person or vehicle.
+
+| Clip, moment | Window | Frames with a person, off → on | False-positive frames, off → on | First seen, off → on |
+|---|---|---|---|---|
+| 0018, distant figure at 1:58 | 1:40–2:10 (30) | 10 → **16** | 0 → 0 | 2:00 → **1:53** |
+| 0018, whole clip | 168 | 48 → 54 | 0 → 2 (a roof called truck, twice) | |
+| 0026, people at 1:35 | 1:25–1:55 (30) | 4 → **7** | 0 → 0 | 1:37 → **1:33** |
+| 0026, whole clip | 223 | 4 → 8 | 0 → 0 (see note) | first person 1:37 → **1:09** |
+| 0017, the pilot at 2:43 (control) | 2:30–2:55 (25) | 2 → 5 | 0 → 0 | 2:41 → 2:37 |
+| 0017, whole clip | 222 | 2 → 5 | 1 → 1 (horizon) | |
+| 0002, busy car park, whole clip | 225 | 52 → 56 (any correct box 69 → 95) | 23 → 34 | |
+
+- **False positives:** on 0002, 16 of the 116 tracks were wrong with Search off and 22 of
+  214 with it on. Almost all were long white fences, pergolas and horizon lines called
+  "train" (below 0.6 these count as truck). That is a weakness of the normal detector too, and
+  Search shows a few more of them. The extra correct boxes with Search on were mostly parked
+  cars.
+- **Note on 0026:** both modes box long rows of white objects in the distance as "train"; they
+  may be parked rolling stock, so they are counted neither right nor wrong.
+- **Rate:** detection passes per second (higher is smoother):
+
+  | Mac | Clip | Normal | Search | Search + Air watch, `FPV_AIR=1` only (Air watch) |
+  |---|---|---|---|---|
+  | HQ M4 Max, nothing else on the GPU | 0018 | 54 | 43 | 36 (4.9) |
+  | HQ M4 Max | 0002 | 46 | 36 | 30 (4.9) |
+  | Drone-ops M4 Pro, sharing the GPU with another fpv-vision replay | 0018 / 0002 | 15 / 13 | 6.3 / 3.9 | – |
+
+  The M4 Pro figures were taken while other demo tools were running on it, so they are a floor,
+  not its real rate.
+
+## Air watch (off: air detection belongs to OP sentry)
+
+FPV vision is a drone looking at the ground, so it doesn't look for aircraft. Drones, helicopters,
+aeroplanes and birds are OP sentry's job, the static defensive camera, and the six air clips
+(`~/Desktop/ISR-demo/air-clips`) belong to it. The code below is kept but never offered in the
+UI: no tickbox, no air tracks in In view, no Mark hostile. It only runs with `FPV_AIR=1`, and
+YOLOE and its text encoder are only downloaded or loaded then (`--setup-only` skips them
+otherwise). Without `FPV_AIR=1`, `POST /api/air` and `/api/air/mark` return 409.
+
 
 COCO has "airplane" but no drone or helicopter, and small drones come out as "bird" or "kite",
-which the normal detector filters out. **Air watch** (`FPV_AIR=1`, or the Air watch tickbox
-under Source) runs a second, open-vocabulary model beside the normal detector, on its own thread:
+which the normal detector filters out. **Air watch** (`FPV_AIR=1`) runs a second, open-vocabulary model beside the normal detector, on its own thread:
 
 - **Model and prompts:** YOLOE (`yoloe-26s-seg.pt`, Ultralytics 8.4) prompted with "drone",
   "quadcopter", "helicopter", "aeroplane", "bird". Quadcopter maps to drone. Bird stays visible,
@@ -555,7 +620,7 @@ under Source) runs a second, open-vocabulary model beside the normal detector, o
     or bearing; with no position, no CoT is sent.
   - Drones also send a mesh alert, within the 30 s mesh limit. Birds are shown only.
 - **Offline:** YOLOE needs a 250 MB text encoder only to turn the prompts into embeddings.
-  `--setup-only` downloads the weights, caches the embeddings (11 KB) and deletes the encoder.
+  With `FPV_AIR=1`, `--setup-only` downloads the weights, caches the embeddings (11 KB) and deletes the encoder.
   At run time it needs no network, and it runs on MPS.
 
 **Naming by the vision model.** YOLOE finds and tracks air objects; the local VLM names them.
@@ -582,7 +647,7 @@ describes scenes. On the drone-ops Mac, which runs its own Ollama, use
 - **Renamed tracks:** a track first sent as a helicopter or aeroplane and later named a drone sends
   a CoT update (same uid, new type) and a mesh alert.
 
-**Measured on the HQ M4 Max** on the six demo clips in `~/Desktop/ISR-demo/fpv-vision/air-clips`
+**Measured on the HQ M4 Max** on the six demo clips in `~/Desktop/ISR-demo/air-clips`
 (licences in `CREDITS.txt` there).
 
 - **Method:** played in real time at 10 passes per second, as the app does. AI naming used
@@ -615,63 +680,6 @@ describes scenes. On the drone-ops Mac, which runs its own Ollama, use
 Without AI naming (stock YOLOE names only), every open-vocabulary model tried called multirotors
 "helicopter" or "aeroplane": YOLOE 26s/26m/26l/11l and YOLO-World v2 s/l/x.
 
-## Search: small, distant people and vehicles
-
-The normal detector squeezes the whole frame into one 640 px input, so a figure far off across
-open ground is a few pixels tall and is missed or comes and goes. **Search** (`FPV_SEARCH=1`, or
-the Search tickbox under Source) runs the same weights on tiles instead:
-
-- **Tiling:** the full frame plus 2×2 overlapping tiles (15 %), or 3×3 when the source is 1440p
-  or more (`FPV_SEARCH_GRID`), in one batch. It shares the tiling code with Air watch. Boxes
-  cut by an inner tile edge are dropped, and the rest are merged with NMS within a group:
-  - car, bus, train and truck are one group, so a van called car in one tile and truck in
-    another stays one box;
-  - people, two-wheelers, boats and aircraft are groups of their own, so a person standing
-    against a vehicle is kept.
-- **Tracking and the hit gate:** ByteTrack, then a track is shown only after 2 passes in a row
-  (`FPV_SEARCH_HITS`). Confidence drops to 0.25 (`FPV_SEARCH_CONF`) to reach the faint ones; the
-  gate keeps one-off false positives off the screen. Counting and the class vote are as normal.
-- **In place of the normal pass:** while Search is on it replaces the normal detector, so
-  nothing is boxed twice. The pill shows "Search" and its rate.
-- **With Air watch:** both run together. While Search is on, Air watch is held to
-  `FPV_SEARCH_AIR_FPS` passes per second (default 5), because they share the GPU.
-- **Cost:** one inference per tile, so the detection rate drops (table below).
-
-**Measured** on real DJI flight clips (1080p60, so 2×2 tiles), on the drone-ops M4 Pro, with
-yolo26s at 640 px. Detection ran at 10 passes per second of video so the trackers and the gate
-behave as they do live, and was scored at one frame per second. Every track's best crop was
-checked by eye. "Frames with a person" counts sampled frames with at least one correct person
-box. "False-positive frames" counts sampled frames with at least one box on something that isn't
-a person or vehicle.
-
-| Clip, moment | Window | Frames with a person, off → on | False-positive frames, off → on | First seen, off → on |
-|---|---|---|---|---|
-| 0018, distant figure at 1:58 | 1:40–2:10 (30) | 10 → **16** | 0 → 0 | 2:00 → **1:53** |
-| 0018, whole clip | 168 | 48 → 54 | 0 → 2 (a roof called truck, twice) | |
-| 0026, people at 1:35 | 1:25–1:55 (30) | 4 → **7** | 0 → 0 | 1:37 → **1:33** |
-| 0026, whole clip | 223 | 4 → 8 | 0 → 0 (see note) | first person 1:37 → **1:09** |
-| 0017, the pilot at 2:43 (control) | 2:30–2:55 (25) | 2 → 5 | 0 → 0 | 2:41 → 2:37 |
-| 0017, whole clip | 222 | 2 → 5 | 1 → 1 (horizon) | |
-| 0002, busy car park, whole clip | 225 | 52 → 56 (any correct box 69 → 95) | 23 → 34 | |
-
-- **False positives:** on 0002, 16 of the 116 tracks were wrong with Search off and 22 of
-  214 with it on. Almost all were long white fences, pergolas and horizon lines called
-  "train" (below 0.6 these count as truck). That is a weakness of the normal detector too, and
-  Search shows a few more of them. The extra correct boxes with Search on were mostly parked
-  cars.
-- **Note on 0026:** both modes box long rows of white objects in the distance as "train"; they
-  may be parked rolling stock, so they are counted neither right nor wrong.
-- **Rate:** detection passes per second (higher is smoother):
-
-  | Mac | Clip | Normal | Search | Search + Air watch (Air watch) |
-  |---|---|---|---|---|
-  | HQ M4 Max, nothing else on the GPU | 0018 | 54 | 43 | 36 (4.9) |
-  | HQ M4 Max | 0002 | 46 | 36 | 30 (4.9) |
-  | Drone-ops M4 Pro, sharing the GPU with another fpv-vision replay | 0018 / 0002 | 15 / 13 | 6.3 / 3.9 | – |
-
-  The M4 Pro figures were taken while other demo tools were running on it, so they are a floor,
-  not its real rate.
-
 ## Configuration reference
 
 Configuration comes from the environment (`/etc/fpv-vision.env` on the Pi, or `station.env` /
@@ -693,8 +701,8 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_INFER_MAX_WIDTH` | 1280 | downscale big frames before inference |
 | `FPV_CONF` / `FPV_ALL_CLASSES` | 0.30 / 0 | |
 | `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 20 / 960 / 75 | (30 / 1280 via run-laptop.sh) |
-| `FPV_AIR` / `FPV_AIR_FPS` | 0 / 10 | Air watch on at start; max Air watch passes per second (also a tickbox under Source) |
-| `FPV_SEARCH` / `FPV_SEARCH_CONF` / `FPV_SEARCH_HITS` | 0 / 0.25 / 2 | Search on at start (also a tickbox under Source); its confidence threshold; passes in a row before a box is shown |
+| `FPV_AIR` / `FPV_AIR_FPS` | 0 / 10 | Air watch on at start; max Air watch passes per second (`FPV_AIR=1` only; never in the UI: air detection is OP sentry's) |
+| `FPV_SEARCH` / `FPV_SEARCH_CONF` / `FPV_SEARCH_HITS` | 0 / 0.25 / 2 | Search on at start (also the tickbox under the source picker); its confidence threshold; passes in a row before a box is shown |
 | `FPV_SEARCH_GRID` / `FPV_SEARCH_AIR_FPS` | auto / 5 | Search tiles: auto = 3×3 at 1440p and up, else 2×2 (or 1, 2, 3); Air watch rate cap while Search is on |
 | `FPV_AIR_NAME_CONF` | 0.7 | YOLOE confidence a track needs before the vision model is asked to name it (`VLM_URL` empty = no naming) |
 | `FPV_HUD` | 0 | debug text (model, fps, time) burned into the video; also a toggle under Details. The SIM/REC/LIVE badge is always drawn |
@@ -726,7 +734,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | POST | `/api/periodic {seconds}`, `/api/spot-report {…}`, `/api/counts/reset` | |
 | POST | `/api/run {on}`, `/api/hud {on}` | Stop/Start detection and the stream; debug text on the video |
 | POST | `/api/search {on}` | Search on/off (409 if no detector model is loaded) |
-| POST | `/api/air {on}`, `/api/air/mark {track, hostile}` | Air watch on/off (409 if not downloaded); mark an air track hostile |
+| POST | `/api/air {on}`, `/api/air/mark {track, hostile}` | Air watch on/off (409 unless `FPV_AIR=1`, or if not downloaded); mark an air track hostile |
 
 ## Development
 

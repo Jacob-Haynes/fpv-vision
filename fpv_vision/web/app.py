@@ -204,7 +204,10 @@ def create_app(service) -> FastAPI:
             track = int(body.get("track"))
         except (TypeError, ValueError):
             raise HTTPException(400, "track must be a number")
-        return service.mark_air(track, bool(body.get("hostile", True)))
+        res = service.mark_air(track, bool(body.get("hostile", True)))
+        if not res.get("ok"):
+            raise HTTPException(409, res.get("error", "Air watch unavailable"))
+        return res
 
     @app.post("/api/hud")
     async def hud(body: dict = Body(...)):

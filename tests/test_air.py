@@ -1,4 +1,6 @@
-"""Air watch: class mapping, tiling merge, CoT types, palette and the toggle (no model needed)."""
+"""Air watch: class mapping, tiling merge, CoT types, palette and the toggle (no model needed).
+
+Air watch is FPV_AIR=1 only (air detection is OP sentry's); these tests turn it on explicitly."""
 
 import xml.etree.ElementTree as ET
 
@@ -103,6 +105,7 @@ class FakeAir:
 def air_client(settings):
     settings.sensor_lat, settings.sensor_lon = 42.0, -93.0
     settings.air_fps = 30
+    settings.air = True  # FPV_AIR=1
     pipeline = Pipeline(settings, FakeDetector(), sources.VideoSource("synthetic")).start()
     tak, mesh = CotSender(enabled=False, station="t"), MeshBus(enabled=False)
     cot_sent, mesh_sent = [], []
@@ -141,6 +144,7 @@ def test_air_toggle_counts_reports_and_hostile(air_client):
 
 
 def test_air_unavailable_reports_why(settings):
+    settings.air = True
     pipeline = Pipeline(settings, FakeDetector(), sources.VideoSource("synthetic"))
 
     def missing():
@@ -163,3 +167,35 @@ def test_fpv_air_env(monkeypatch):
     assert s.air is True and s.air_fps == 6.0
     monkeypatch.delenv("FPV_AIR")
     assert Settings.from_env().air is False
+
+
+def test_air_watch_is_off_and_hidden_without_fpv_air(settings):
+    """FPV vision looks at the ground: no Air watch in the UI, no YOLOE load, API refuses."""
+    loaded = []
+    pipeline = Pipeline(settings, FakeDetector(), sources.VideoSource("synthetic"))
+    svc = Service(settings, pipeline, SceneDescriber("off", None, GeminiDescriber("", "g")),
+                  CotSender(enabled=False), MeshBus(enabled=False), air_factory=lambda: loaded.append(1))
+    client = TestClient(create_app(svc))
+    r = client.post("/api/air", json={"on": True})
+    assert r.status_code == 409 and "OP sentry" in r.json()["detail"] and loaded == [] and pipeline.air is None
+    assert client.post("/api/air/mark", json={"track": 1}).status_code == 409
+    assert client.get("/api/status").json()["air"]["enabled"] is False
+    page = client.get("/").text
+    assert "airToggle" not in page and "Air watch" not in page and "Mark hostile" not in page
+    assert "searchToggle" in page and "small, distant people and vehicles" in page
+
+
+def test_setup_only_skips_the_air_model(settings, monkeypatch, capsys):
+    from fpv_vision import __main__ as cli, air as air_mod, detector, sample
+
+    monkeypatch.setattr(sample, "prefetch", lambda d: {})
+    monkeypatch.setattr(cli, "ensure_weights", lambda p: p, raising=False)
+    monkeypatch.setattr(detector, "ensure_weights", lambda p: p)
+    called = []
+    monkeypatch.setattr(air_mod, "prefetch", lambda *a, **k: called.append(1) or "x")
+    settings.device = "cpu"
+    cli.prefetch(settings)
+    assert called == [] and "air watch: skipped" in capsys.readouterr().out
+    settings.air = True
+    cli.prefetch(settings)
+    assert called == [1]
