@@ -402,6 +402,7 @@ class VideoSource:
         self._seek_req: float | None = None
         self._skip_req = 0
         self._paused = False
+        self._hold_first = False  # DEMO_MODE=on_demand: show the first frame, then wait for Start
 
     @property
     def is_replay(self) -> bool:
@@ -442,6 +443,12 @@ class VideoSource:
 
     def pause(self, paused: bool) -> None:
         self._paused = bool(paused)
+        if not paused:
+            self._hold_first = False
+
+    def hold_first_frame(self) -> None:
+        """Replay only: publish the first frame, then pause until Start (``pause(False)``)."""
+        self._hold_first = True
 
     def status(self) -> dict:
         fid, frame, _ = self.latest()
@@ -591,6 +598,8 @@ class VideoSource:
             if self.loop_seconds and pos > self.loop_seconds:
                 break
             self._publish(frame, ts)
+            if self._hold_first:
+                self._hold_first, self._paused = False, True
             n += 1
             if ts - t_window >= 2.0:
                 self.fps_in = n / (ts - t_window)

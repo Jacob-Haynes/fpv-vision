@@ -47,3 +47,21 @@ def spot_report_cot(*, lat: float, lon: float, callsign: str, remarks: str, uid:
         f'<point lat="{lat:.7f}" lon="{lon:.7f}" hae="9999999.0" ce="{ce:.1f}" le="9999999.0"/>'
         f"<detail>{''.join(detail)}</detail></event>"
     )
+
+
+def delete_cot(*, target_uid: str, target_type: str, lat: float, lon: float, sender: str = "FPV-VISION",
+               now: float | None = None) -> str:
+    """Remove a marker from ATAK maps at once: t-x-d-d with a link to it and ``__forcedelete``.
+
+    OpenTAKServer relays it but keeps its own stored copy, so send the marker once more with
+    stale = now first (as op-sentry does). The point is the marker's own, never 0,0."""
+    now = now or time.time()
+    t = iso(now)
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<event version="2.0" uid={quoteattr(f"{target_uid}-del-{int(now * 1000)}")} type="t-x-d-d" how="h-g-i-g-o" '
+        f'time="{t}" start="{t}" stale="{iso(now + 10)}">'
+        f'<point lat="{lat:.7f}" lon="{lon:.7f}" hae="9999999.0" ce="9999999.0" le="9999999.0"/>'
+        f'<detail><link uid={quoteattr(target_uid)} relation="none" type={quoteattr(target_type)}/>'
+        f'<__forcedelete/><remarks source={quoteattr(sender)}>Cleared by the presenter.</remarks></detail></event>'
+    )

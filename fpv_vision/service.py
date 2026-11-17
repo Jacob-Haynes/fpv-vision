@@ -7,6 +7,7 @@ import os
 import socket
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from fpv_vision import cot, geo, sources, spotrep, summary
@@ -64,6 +65,7 @@ class Service:
         self.periodic_seconds = settings.gemini_periodic_seconds if describer.enabled else 0.0
         self.last_summary: dict | None = None
         self.reports: list[dict] = []
+        self._markers: dict[str, dict] = {}  # uid -> spot_report_cot kwargs, for POST /api/demo/clear
         self.jobs: dict = {}
         self._stop = threading.Event()
         self._periodic_thread: threading.Thread | None = None
@@ -179,10 +181,12 @@ class Service:
         remarks = (f"{spotrep.PROVENANCE_COT.get(prov, '')}Air watch: {what} seen by {self.tak.callsign} at "
                    f"{spotrep.dtg()}, track {tid}, confidence {d.conf:.2f}. The position is the observer's, "
                    "not the target's: no range or bearing.")
-        xml = cot.spot_report_cot(lat=lat_lon[0], lon=lat_lon[1], callsign=f"{d.label.capitalize()} {tid}",
-                                  remarks=remarks, uid=f"{self.tak.uid}-air-{tid}", cot_type=typ, stale_s=300,
-                                  ce=1000.0, sender_uid=self.tak.uid, sender_callsign=self.tak.callsign, how="m-g")
-        queued = self.tak.send(xml)
+        marker = dict(lat=lat_lon[0], lon=lat_lon[1], callsign=f"{d.label.capitalize()} {tid}", remarks=remarks,
+                      uid=f"{self.tak.uid}-air-{tid}", cot_type=typ, stale_s=300, ce=1000.0,
+                      sender_uid=self.tak.uid, sender_callsign=self.tak.callsign, how="m-g")
+        queued = self.tak.send(cot.spot_report_cot(**marker))
+        if queued:
+            self._markers[marker["uid"]] = marker
         return {"queued": queued, "type": typ, "error": None if queued else self.tak.last_error}
 
     def _on_air_track(self, d) -> None:
@@ -353,11 +357,13 @@ class Service:
             rep["remarks"] += f"\nFrom recorded footage: {snap['video_file']} t={snap.get('video_time', 0)}s"
         out = {"ok": True, "report": rep, "snapshot": snap["name"], "cot": None, "mesh": None}
         if send_cot:
-            xml = cot.spot_report_cot(lat=rep["lat"], lon=rep["lon"], callsign=rep["callsign"],
-                                      remarks=rep["remarks"], sender=self.settings.callsign,
-                                      sender_uid=getattr(self.tak, "uid", None),
-                                      sender_callsign=getattr(self.tak, "callsign", None))
-            queued = self.tak.send(xml)
+            marker = dict(lat=rep["lat"], lon=rep["lon"], callsign=rep["callsign"], remarks=rep["remarks"],
+                          uid=f"fpv-vision-spot-{uuid.uuid4().hex[:12]}", sender=self.settings.callsign,
+                          sender_uid=getattr(self.tak, "uid", None),
+                          sender_callsign=getattr(self.tak, "callsign", None))
+            queued = self.tak.send(cot.spot_report_cot(**marker))
+            if queued:
+                self._markers[marker["uid"]] = marker
             out["cot"] = {"queued": queued, "connected": self.tak.connected,
                           "registered": getattr(self.tak, "registered", False),
                           "error": None if queued else self.tak.last_error}
@@ -369,6 +375,24 @@ class Service:
         self.reports.insert(0, {"ts": time.time(), **out})
         del self.reports[20:]
         return out
+
+    # ------------------------------------------------------------ demo (ui-kit DEMO-TRIGGER-CONTRACT)
+    def demo_scenarios(self) -> dict:
+        """fpv-vision has no simulated scenarios: the source picker covers the clips and the live GoPro."""
+        return {"mode": self.settings.demo_mode, "scenarios": [], "active": []}
+
+    def demo_clear(self) -> dict:
+        """Remove every spot report (and Air watch marker) this run put on the map: each marker once
+        more with stale = now, then a t-x-d-d __forcedelete, then our SA again (OTS marks the sender
+        disconnected on a t-x-d-d). The report history on this page is kept."""
+        markers, self._markers = self._markers, {}
+        for m in markers.values():
+            self.tak.send(cot.spot_report_cot(**{**m, "stale_s": 0}), force=True)
+            self.tak.send(cot.delete_cot(target_uid=m["uid"], target_type=m.get("cot_type", "a-u-G"),
+                                         lat=m["lat"], lon=m["lon"], sender=self.settings.callsign), force=True)
+        if markers and hasattr(self.tak, "resend_sa"):
+            self.tak.resend_sa()
+        return {"ok": True, "cleared": len(markers)}
 
     def default_position(self) -> str:
         """Operator default (FPV_DEFAULT_POSITION), else shared SENSOR_LAT/SENSOR_LON. Never 0,0."""
@@ -559,7 +583,7 @@ class Service:
     def heartbeat(self) -> dict:
         return {"tool": "fpv-vision", "host": short_hostname(),
                 "url": self.public_url(), "mode": self.mode(), "status": self.health(), "ts": int(time.time()),
-                "detail": self.detail()}
+                "detail": self.detail(), "demo_mode": self.settings.demo_mode, "demo_active": []}
 
     def status(self) -> dict:
         p = self.pipeline
@@ -583,6 +607,7 @@ class Service:
             "totals": {**p.counter.snapshot(), **p.air_counter.snapshot()},
             "air": self.air_status(),
             "search": self.search_status(),
+            "demo": self.demo_scenarios(),
             "live_summary": summary.describe(dets, shape[1] or 1) if shape[1] else "",
             "last_summary": self.last_summary,
             "hud": self.settings.show_hud,

@@ -180,6 +180,18 @@ def create_app(service) -> FastAPI:
             raise HTTPException(400, "seconds must be a number")
         return {"periodic_seconds": service.set_periodic(seconds), "enabled": service.describer.enabled}
 
+    @app.get("/api/demo/scenarios")
+    async def demo_scenarios():
+        return service.demo_scenarios()
+
+    @app.post("/api/demo/trigger")
+    async def demo_trigger(body: dict = Body(default={})):
+        raise HTTPException(404, f"no scenario {body.get('id')!r}: fpv-vision has none (pick a clip or the camera)")
+
+    @app.post("/api/demo/clear")
+    async def demo_clear():
+        return service.demo_clear()
+
     @app.post("/api/run")
     async def run(body: dict = Body(...)):
         return service.set_running(bool(body.get("on", True)))

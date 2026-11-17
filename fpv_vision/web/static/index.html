@@ -132,6 +132,12 @@
           <p id="selSnap">Uses a fresh snapshot. Tap a snapshot below to use that one.</p>
         </details>
       </div>
+      <div class="isr-card">
+        <h2>Demo</h2>
+        <p class="isr-muted">Pick a clip or the camera above and press Start. Clear removes this tool's spot reports from the map.</p>
+        <button class="isr-btn fv-full" id="btnDemoClear">Clear demo</button>
+        <div class="fv-msg isr-muted" id="demoMsg"></div>
+      </div>
     </aside>
   </div>
 
@@ -398,6 +404,12 @@ $("btnGo").onclick = () => {
   switchSource(spec);
 };
 $("btnStop").onclick = () => api("/api/run", { on: false }).then(poll);
+$("btnDemoClear").onclick = async () => {
+  try {
+    const r = await api("/api/demo/clear", {});
+    say($("demoMsg"), r.cleared ? `Removed ${r.cleared} spot report${r.cleared === 1 ? "" : "s"} from the map.` : "Nothing on the map to remove.");
+  } catch (e) { say($("demoMsg"), `Could not clear: ${e.message}.`, false); }
+};
 $("hudToggle").onchange = () => api("/api/hud", { on: $("hudToggle").checked }).catch(() => {});
 $("btnSrcCustom").onclick = () => $("srcCustom").value.trim() && switchSource($("srcCustom").value.trim());
 

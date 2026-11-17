@@ -85,7 +85,9 @@ class Settings:
     show_hud: bool = False  # debug text (model, fps, time) burned into the video; the provenance badge is always drawn
 
     # --- replay / footage library ---
-    footage_dirs: str = "~/Movies/FPV"  # os.pathsep-separated dirs listed in the UI's footage picker
+    footage_dirs: str = "~/Movies/FPV"
+    # --- demo style (ui-kit DEMO-TRIGGER-CONTRACT): continuous | on_demand (step by step)
+    demo_mode: str = "continuous"  # os.pathsep-separated dirs listed in the UI's footage picker
     allow_screen: bool = sys.platform == "darwin"  # offer screen capture (phone mirroring) in the UI
     request_camera: bool = True  # macOS: ask for camera permission at startup (main thread)
 
@@ -178,6 +180,8 @@ class Settings:
         if _env("FPV_DATA_DIR"):
             s.data_dir = Path(_env("FPV_DATA_DIR"))
         s.footage_dirs = _env("FPV_FOOTAGE_DIRS", s.footage_dirs)
+        s.demo_mode = "on_demand" if _env("DEMO_MODE", s.demo_mode).strip().lower() in ("on_demand", "on-demand", "step") \
+            else "continuous"
         s.allow_screen = _env_bool("FPV_ALLOW_SCREEN", s.allow_screen)
         s.request_camera = _env_bool("FPV_REQUEST_CAMERA", s.request_camera)
         s.max_clip_seconds = _env_int("FPV_MAX_CLIP_SECONDS", s.max_clip_seconds)

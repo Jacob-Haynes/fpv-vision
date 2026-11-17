@@ -412,13 +412,15 @@ live source.
 Every 10 s, fpv-vision publishes this retained message to `isrkit/heartbeat/fpv-vision`:
 
 ```json
-{"tool":"fpv-vision","host":"isr-droneops","url":"http://isr-droneops.local:8110/","mode":"replay","status":"ok","ts":1794836403,"detail":"yolo26s mps 2160p 58fps, VLM qwen3-vl:8b-instruct @ isr-hq"}
+{"tool":"fpv-vision","host":"isr-droneops","url":"http://isr-droneops.local:8110/","mode":"replay","status":"ok","ts":1794836403,"detail":"yolo26s mps 2160p 58fps, VLM qwen3-vl:8b-instruct @ isr-hq","demo_mode":"continuous","demo_active":[]}
 ```
 
 - `mode` is `replay` | `simulate` | `mps` | `cuda` | `cpu`, which is the video source type, or
   the accelerator when the input is live.
 - `detail` is optional and human-readable, e.g. `"yolo26s mps 1080p 58fps, VLM qwen3-vl:8b-instruct @ isr-hq"`.
 - `status` is `ok`, `degraded` (no detector, or the source is reconnecting) or `error`.
+- `demo_mode` is `continuous` or `on_demand` (`DEMO_MODE`); `demo_active` is always `[]`, as
+  fpv-vision has no simulated scenarios. They sit beside `detail`, which stays a text line.
 - On a clean exit it publishes `stopped`. The MQTT last-will publishes `error` if the process dies.
 - `host` follows contract C4.1: env `ISR_HOST` if set, otherwise the lowercased short
   `socket.gethostname()`. The `url` is `http://<host>.local:<port>/`; override it with
@@ -463,7 +465,16 @@ the big screen or on a tablet at `http://isr-droneops.local:8110`.
 7. **Discuss.** Why the marker is at the *entered* grid. What the cloud fallback would send off
    the device. What it would take to geolocate detections.
 
-Reset between groups with **Reset counts**.
+Reset between groups with **Reset counts**, and press **Clear demo** to take this run's spot
+reports off the map.
+
+**Step by step (`DEMO_MODE=on_demand`).** fpv-vision has no simulated scenarios, because the source
+picker already covers the DJI clips and the live GoPro. In this mode a clip or the sample clip
+starts held on its first frame, with the source reading **Stopped**. The presenter picks the clip
+(or the capture card) and presses **Start**. Live sources start as usual. **Clear demo** (or
+`POST /api/demo/clear`) sends each spot report this run put on the map once more with stale = now,
+then a `t-x-d-d` `__forcedelete`, then the registration SA again, as op-sentry does. The page keeps
+its report history. Continuous mode (the default) is unchanged apart from the Clear button.
 
 **Failure drills:**
 
@@ -700,6 +711,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_SEARCH` / `FPV_SEARCH_CONF` / `FPV_SEARCH_HITS` | 0 / 0.25 / 2 | Search on at start (also the tickbox under the source picker); its confidence threshold; passes in a row before a box is shown |
 | `FPV_SEARCH_GRID` / `FPV_SEARCH_AIR_FPS` | auto / 5 | Search tiles: auto = 3×3 at 1440p and up, else 2×2 (or 1, 2, 3); Air watch rate cap while Search is on |
 | `FPV_AIR_NAME_CONF` | 0.7 | YOLOE confidence a track needs before the vision model is asked to name it (`VLM_URL` empty = no naming) |
+| `DEMO_MODE` | continuous | `on_demand` (step by step): a clip starts held on its first frame until Start |
 | `FPV_HUD` | 0 | debug text (model, fps, time) burned into the video; also a toggle under Details. The SIM/REC/LIVE badge is always drawn |
 | `FPV_ALLOW_SCREEN` / `FPV_REQUEST_CAMERA` | 1 on macOS / 1 | screen source; macOS camera prompt |
 | `FPV_DATA_DIR` | `/var/lib/fpv-vision` or `./data` | snapshots, clips, models, analysis |
@@ -729,6 +741,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | POST | `/api/periodic {seconds}`, `/api/spot-report {…}`, `/api/counts/reset` | |
 | POST | `/api/run {on}`, `/api/hud {on}` | Stop/Start detection and the stream; debug text on the video |
 | POST | `/api/search {on}` | Search on/off (409 if no detector model is loaded) |
+| GET/POST | `/api/demo/scenarios`, `/api/demo/clear`, `/api/demo/trigger {id}` | demo contract: mode plus an empty scenario list; remove this run's spot reports from the map; trigger always 404s (no scenarios) |
 | POST | `/api/air {on}`, `/api/air/mark {track, hostile}` | Air watch on/off (409 unless `FPV_AIR=1`, or if not downloaded); mark an air track hostile |
 
 ## Development

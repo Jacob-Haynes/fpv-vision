@@ -219,6 +219,7 @@ def main(argv=None) -> int:
     from fpv_vision.mesh import MeshBus
     from fpv_vision.pipeline import Pipeline
     from fpv_vision.service import Service, make_source
+    from fpv_vision.sources import REPLAY_KINDS
     from fpv_vision.vlm import OpenAICompatDescriber, SceneDescriber
     from fpv_vision.web.app import create_app
 
@@ -236,6 +237,10 @@ def main(argv=None) -> int:
 
     detector = build_detector(settings)
     source = make_source(settings.source, settings)
+    if settings.demo_mode == "on_demand" and source.spec.kind in REPLAY_KINDS:
+        # step by step: the presenter picks the clip (or the live GoPro) and presses Start
+        source.hold_first_frame()
+        log.info("DEMO_MODE=on_demand: %s held on its first frame until Start", settings.source)
     pipeline = Pipeline(settings, detector, source).start()
     gemini = GeminiDescriber(settings.gemini_api_key, settings.gemini_model, settings.gemini_min_interval)
     local_vlm = OpenAICompatDescriber(settings.vlm_url, settings.vlm_model, settings.vlm_api_key,

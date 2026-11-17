@@ -125,12 +125,14 @@ class TakClient:
         if self._thread:
             self._thread.join(timeout=3)
 
-    def send(self, xml: str) -> bool:
-        """Queue a CoT event for delivery after registration. False if disabled, rate-limited or full."""
+    def send(self, xml: str, force: bool = False) -> bool:
+        """Queue a CoT event for delivery after registration. False if disabled, rate-limited or full.
+
+        ``force`` skips the per-uid limit, for the last word on a marker (stale-now before a delete)."""
         if not self.enabled:
             return False
         uid, now = event_uid(xml), time.time()
-        if uid:
+        if uid and not force:
             if now - self._last_uid.get(uid, 0.0) < self.uid_min_interval:
                 self.last_error = f"CoT rate limit: uid {uid} sent < {self.uid_min_interval:.0f} s ago"
                 return False
@@ -142,6 +144,17 @@ class TakClient:
             return True
         except queue.Full:
             self.last_error = "queue full"
+            return False
+
+    def resend_sa(self) -> bool:
+        """Queue our registration SA behind what is already queued: OpenTAKServer marks the sender
+        disconnected on a t-x-d-d, so it goes out again straight after the deletes."""
+        if not self.enabled:
+            return False
+        try:
+            self._q.put_nowait((time.time(), self._sa()))
+            return True
+        except queue.Full:
             return False
 
     def status(self) -> dict:
