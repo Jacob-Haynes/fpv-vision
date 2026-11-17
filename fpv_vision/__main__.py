@@ -15,7 +15,7 @@ log = logging.getLogger("fpv_vision")
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(prog="fpv-vision", description="Live object detection on drone/handheld video (ISR demo)")
+    p = argparse.ArgumentParser(prog="fpv-vision", description="Live object detection on drone/handheld video (ISTAR demo)")
     p.add_argument("--simulate", action="store_true", help="use the public-domain sample clip (no hardware)")
     p.add_argument("--source", help="video source spec: replay:/path/clip.mp4, camera:iPhone, uvc:0, screen:1, "
                                     "rtsp://..., simulate")

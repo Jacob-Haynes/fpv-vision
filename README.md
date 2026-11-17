@@ -581,7 +581,7 @@ Code layout (`fpv_vision/`):
 | `mesh.py` | MQTT: mesh texts and the heartbeat |
 | `cot.py`, `spotrep.py`, `geo.py` | ATAK output, SALUTE reports, MGRS |
 | `service.py` | glue between the parts |
-| `web/` | web UI (shared ISR kit look: `static/isr-ui.css` and `isr-ui.js`, vendored unchanged from `ui-kit/`) |
+| `web/` | web UI (shared ISTAR kit look: `static/isr-ui.css` and `isr-ui.js`, vendored unchanged from `ui-kit/`) |
 
 ## License
 

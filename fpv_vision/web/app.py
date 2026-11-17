@@ -32,7 +32,7 @@ def create_app(service) -> FastAPI:
     async def index():
         return (STATIC_DIR / "index.html").read_text()
 
-    # shared ISR kit look (vendored unchanged from ui-kit/)
+    # shared ISR kit look (vendored unchanged from ui-kit/, with fonts/)
     @app.get("/isr-ui.css")
     async def isr_ui_css():
         return FileResponse(STATIC_DIR / "isr-ui.css", media_type="text/css")
@@ -40,6 +40,11 @@ def create_app(service) -> FastAPI:
     @app.get("/isr-ui.js")
     async def isr_ui_js():
         return FileResponse(STATIC_DIR / "isr-ui.js", media_type="text/javascript")
+
+    @app.get("/fonts/{name}")
+    async def isr_ui_font(name: str):
+        f = _safe_file(STATIC_DIR / "fonts", name)
+        return FileResponse(f, media_type="font/woff2" if f.suffix == ".woff2" else "text/plain")
 
     @app.get("/stream.mjpg")
     async def stream():

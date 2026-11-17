@@ -4,33 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FPV vision</title>
-<link rel="stylesheet" href="/isr-ui.css">
-<script src="/isr-ui.js"></script>
+<link rel="stylesheet" href="/isr-ui.css?v=2">
+<script src="/isr-ui.js?v=2"></script>
 <style>
   /* layout specific to fpv-vision; colours, type and controls come from isr-ui.css */
-  .fv-top { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--gap); align-items: start; }
+  .fv-top { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--gap); align-items: start; }
   @media (max-width: 900px) { .fv-top { grid-template-columns: minmax(0, 1fr); } }
   .fv-side { display: grid; gap: var(--gap); }
-  .fv-video { position: relative; background: #000; border-radius: var(--r); overflow: hidden; }
+  .fv-video { position: relative; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
   #video { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: calc(100vh - 150px); object-fit: contain; }
-  #srcTag { position: absolute; bottom: 12px; right: 12px; font-size: 18px; padding: 4px 12px; background: rgba(13,17,23,.85); }
-  #cropBox { position: absolute; border: 2px dashed var(--warn); background: rgba(210,153,34,.12); display: none; pointer-events: none; }
+  #srcTag { position: absolute; bottom: 12px; right: 12px; font-size: 16px; padding: 4px 10px; background: var(--bg); }
+  #cropBox { position: absolute; border: 1px dashed var(--warn); display: none; pointer-events: none; }
   .fv-video.cropping { cursor: crosshair; }
   .fv-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
   .fv-full { width: 100%; }
-  button:disabled { opacity: .55; cursor: default; }
   .fv-side select { width: 100%; margin-bottom: 10px; }
   #replayBar { display: none; }
   #replayBar input[type=range] { flex: 1 1 200px; min-height: 0; padding: 0; }
   #counts li { align-items: center; }
   #counts .name { flex: 1; text-transform: capitalize; }
-  #counts .dot { width: 12px; height: 12px; border-radius: 3px; background: var(--accent); }
   .fv-msg { min-height: 1.5em; margin-top: 8px; }
   .fv-msg.bad { color: var(--bad); }
   .fv-below { margin-top: 24px; }
   .fv-gallery { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
-  .fv-snap { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; cursor: pointer; font-size: 14px; }
-  .fv-snap.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .fv-snap { background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; cursor: pointer; font-size: 13px; }
+  .fv-snap.sel { border-color: var(--accent); }
   .fv-snap img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
   .fv-snap div { padding: 6px 10px; }
   .fv-form label { display: block; margin: 10px 0 4px; }
@@ -38,9 +36,9 @@
   .fv-form input[type=checkbox] { min-height: 0; }
   .fv-kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0 16px; }
   .fv-kv span:nth-child(odd) { color: var(--muted); }
-  .fv-kv span:nth-child(even) { color: var(--text); overflow-wrap: anywhere; }
-  .fv-details h3 { margin: 18px 0 6px; font-size: 15px; color: var(--text); }
-  #timeline { display: block; width: 100%; height: 90px; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); cursor: pointer; margin-top: 8px; }
+  .fv-kv span:nth-child(even) { color: var(--text); overflow-wrap: anywhere; font-family: var(--mono); }
+  .fv-details .isr-section { margin: 20px 0 6px; }
+  #timeline { display: block; width: 100%; height: 90px; background: var(--panel-2); border: 1px solid var(--line); cursor: pointer; margin-top: 8px; }
   progress { width: 100%; }
 </style>
 </head>
@@ -105,7 +103,7 @@
       <label for="activity" class="isr-muted">Activity</label>
       <input type="text" id="activity" placeholder="2 pax loading vehicle">
       <div class="fv-row"><button class="isr-btn" id="btnSpot">Send report</button></div>
-      <div class="fv-msg" id="spotMsg"></div>
+      <div class="fv-msg isr-mono" id="spotMsg"></div>
       <details class="isr-more">
         <summary>Details</summary>
         <label for="unit">Unit</label>
@@ -127,13 +125,13 @@
   <details class="isr-more fv-details">
     <summary>Details</summary>
 
-    <h3>Performance</h3>
+    <h2 class="isr-section">Performance</h2>
     <div class="fv-kv" id="perf"></div>
 
-    <h3>Detector</h3>
+    <h2 class="isr-section">Detector</h2>
     <div class="fv-kv" id="detInfo"></div>
 
-    <h3>Source</h3>
+    <h2 class="isr-section">Source</h2>
     <div class="fv-kv" id="srcInfo"></div>
     <div class="fv-row">
       <input type="text" id="srcCustom" placeholder="replay:/path, camera:iPhone, screen:1, rtsp://…" style="flex:1 1 260px">
@@ -145,7 +143,7 @@
       <button class="isr-btn" id="btnReset">Reset counts</button>
     </div>
 
-    <h3>Scene description</h3>
+    <h2 class="isr-section">Scene description</h2>
     <div class="fv-kv" id="sceneInfo"></div>
     <label>Describe automatically
       <select id="periodic">
@@ -154,11 +152,11 @@
       </select>
     </label>
 
-    <h3>TAK and mesh</h3>
+    <h2 class="isr-section">TAK and mesh</h2>
     <div class="fv-kv" id="netInfo"></div>
     <ul class="isr-list" id="meshRx"></ul>
 
-    <h3>Post-flight analysis</h3>
+    <h2 class="isr-section">Post-flight analysis</h2>
     <div class="fv-row">
       <select id="anTarget" style="flex:1 1 260px"></select>
       <select id="anFps" aria-label="Frames analysed per second">
@@ -172,14 +170,14 @@
       <progress id="anProg" max="1" value="0"></progress>
       <div id="anInfo"></div>
       <canvas id="timeline" width="1200" height="90"></canvas>
-      <div>People (red) and vehicles (orange) per second. Click to replay from there.</div>
+      <div>People (light) and vehicles (grey) per second. Click to replay from there.</div>
       <div class="fv-gallery" id="anBest" style="margin-top:10px"></div>
     </div>
 
-    <h3>Clips</h3>
+    <h2 class="isr-section">Clips</h2>
     <ul class="isr-list" id="clips"></ul>
 
-    <h3>About</h3>
+    <h2 class="isr-section">About</h2>
     <p>Boxes are image positions only, not map positions. Footage folders: <span id="footDirs"></span>.
       <a href="https://github.com/Jacob-Haynes/fpv-vision" target="_blank" rel="noopener">Source code (AGPL-3.0)</a>.</p>
   </details>
@@ -191,8 +189,8 @@ let cropMode = false, cropStart = null, jobId = null, jobTimer = null, lastJob =
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ago = (ts) => { const s = Math.round(Date.now() / 1000 - ts); return s < 60 ? `${s} s ago` : `${Math.round(s / 60)} min ago`; };
 const mmss = (t) => `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
-const VEH = ["bicycle", "car", "motorcycle", "bus", "train", "truck"];
-const colour = (l) => l === "person" ? "#eb2828" : VEH.includes(l) ? "#ffa500" : "var(--accent)";
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const pad = (n) => String(n).padStart(2, "0");
 const SCENE = { openai_compat: "Local AI", gemini: "Gemini (cloud)", local: "Detector summary", off: "Detector summary" };
 const TAG = { simulated: ["sim", "SIM"], recorded: ["rec", "REC"], live: ["live", "LIVE"] };
 const provOf = (kind) => kind === "simulate" || kind === "synthetic" ? "simulated" : kind === "replay" ? "recorded" : "live";
@@ -250,8 +248,8 @@ function renderStatus(s) {
 
   const labels = [...new Set([...Object.keys(s.counts), ...Object.keys(s.totals)])]
     .sort((a, b) => (s.counts[b] || 0) - (s.counts[a] || 0) || a.localeCompare(b));
-  $("counts").innerHTML = labels.map(l => `<li><span class="dot" style="background:${colour(l)}"></span><span class="name">${esc(l)}</span>
-      <span class="isr-big">${s.counts[l] || 0}</span><span class="isr-muted">${s.totals[l] || 0} seen</span></li>`).join("")
+  $("counts").innerHTML = labels.map(l => `<li><span class="name">${esc(l)}</span>
+      <span class="isr-big">${pad(s.counts[l] || 0)}</span><span class="isr-muted isr-mono">${s.totals[l] || 0} seen</span></li>`).join("")
     || `<li class="isr-muted">Nothing in view</li>`;
 
   if (s.last_summary) {
@@ -440,8 +438,8 @@ function drawTimeline(tl, total) {
   const bw = Math.max(1, c.width / T);
   for (const b of tl) {
     const x = b.t / T * c.width, hp = b.person / max * (c.height - 4), hv = b.vehicle / max * (c.height - 4);
-    g.fillStyle = "#eb2828"; g.fillRect(x, c.height - hp, bw, hp);
-    g.fillStyle = "#ffa500"; g.fillRect(x, c.height - hp - hv, bw, hv);
+    g.fillStyle = cssVar("--text"); g.fillRect(x, c.height - hp, bw, hp);
+    g.fillStyle = cssVar("--muted"); g.fillRect(x, c.height - hp - hv, bw, hv);
   }
   c.onclick = async (e) => {
     const t = (e.offsetX / c.clientWidth) * T;
@@ -503,7 +501,7 @@ $("btnSpot").onclick = async () => {
   try {
     const r = await api("/api/spot-report", { position: $("pos").value, activity: $("activity").value, unit: $("unit").value,
       snapshot: selectedSnap, send_cot: $("sendCot").checked, send_mesh: $("sendMesh").checked });
-    const parts = [`Grid ${r.report.grid}.`];
+    const parts = [`Grid ${r.report.grid}.`];  // shown in .isr-mono
     if (r.cot) parts.push(r.cot.queued ? (r.cot.registered ? "Sent to TAK." : "TAK queued, sends when connected.") : "Not sent to TAK (TAK is off or busy).");
     if (r.mesh) parts.push(r.mesh.sent ? "Sent on mesh." : "Not sent on mesh (mesh offline or sent too recently).");
     say($("spotMsg"), parts.join(" "), true); refreshGallery();

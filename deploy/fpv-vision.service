@@ -1,5 +1,5 @@
 [Unit]
-Description=FPV Vision - live object detection on drone/handheld video (ISR demo)
+Description=FPV Vision - live object detection on drone/handheld video (ISTAR demo)
 After=network-online.target
 Wants=network-online.target
 
