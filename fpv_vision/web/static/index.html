@@ -20,6 +20,12 @@
   .fv-full { width: 100%; }
   [hidden] { display: none !important; }
   .fv-side select { width: 100%; margin-bottom: 10px; }
+  .fv-air { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .fv-air input { min-height: 0; }
+  #airTracks:empty { display: none; }
+  #airTracks li { align-items: center; padding: 4px 0; }
+  #airTracks .name { flex: 1; }
+  #airTracks .isr-btn { min-height: 34px; padding: 4px 10px; font-size: 15px; }
   .fv-state { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .fv-side .isr-card { padding: 12px 14px; }
   .fv-form label { margin: 6px 0 3px; }
@@ -95,11 +101,13 @@
         <div class="fv-state"><span id="srcState" class="isr-mono"></span>
           <button class="isr-btn" id="btnStop">Stop</button></div>
         <button class="isr-btn primary fv-full" id="btnGo">Start</button>
+        <label class="fv-air"><input type="checkbox" id="airToggle"> Air watch <span class="isr-muted" id="airState"></span></label>
         <div class="fv-msg isr-muted" id="srcMsg"></div>
       </div>
       <div class="isr-card">
         <h2>In view</h2>
         <ul class="isr-list" id="counts"></ul>
+        <ul class="isr-list" id="airTracks"></ul>
       </div>
       <div class="isr-card">
         <h2>Scene</h2>
@@ -156,6 +164,10 @@
       <button class="isr-btn" id="btnReset">Reset counts</button>
     </div>
     <div class="fv-row"><label><input type="checkbox" id="hudToggle"> Show debug text on the video (model, fps, time)</label></div>
+
+    <h2 class="isr-section">Air watch</h2>
+    <div class="fv-kv" id="airInfo"></div>
+    <ul class="isr-list" id="airEvents"></ul>
 
     <h2 class="isr-section">Scene description</h2>
     <div class="fv-kv" id="sceneInfo"></div>
@@ -288,6 +300,7 @@ function renderStatus(s) {
   $("recInfo").textContent = rec.active ? `${rec.seconds} s` : "";
   if (!$("pos").value && !posTouched && s.default_grid) $("pos").value = s.default_grid;
   if (document.activeElement !== $("hudToggle")) $("hudToggle").checked = !!s.hud;
+  renderAir(s.air || {});
 
   // Details
   kv($("perf"), [["Video", `${st.render_fps || 0} fps`], ["Detections", `${st.detect_fps || 0} per second`],
@@ -299,6 +312,13 @@ function renderStatus(s) {
     ["Device mode", src.negotiated], ["Receiving", src.live ? `${src.fps_in} fps, ${src.fps_unique} unique (${src.duplicates_dropped} padded duplicates dropped)` : ""],
     ["Clip", rp ? `${rp.file} (${rp.index + 1} of ${rp.files.length}), ${rp.fps} fps, ${rp.dropped} frames skipped to stay real-time` : ""],
     ["Crop", src.crop ? src.crop.map(x => x.toFixed(2)).join(", ") : ""], ["Camera access", s.camera_permission], ["Last error", src.error]]);
+  const a = s.air || {}, am = a.model || {};
+  kv($("airInfo"), [["State", a.on ? "on" : "off"], ["Model", am.model || (a.available ? "downloaded, loads when switched on" : "not downloaded")],
+    ["Prompts", (am.prompts || []).join(", ")], ["Tiles", am.tiles || ""], ["Rate", a.on ? `${a.fps} passes per second, ${a.ms} ms each` : ""],
+    ["Reported", "Drones, helicopters and aeroplanes to TAK at the observer's position; drones also on mesh. Birds are shown only."],
+    ["Error", a.error ? "Air watch model missing: run --setup-only while online" : ""]]);
+  $("airEvents").innerHTML = (a.events || []).map(e => `<li><span class="t isr-mono">${new Date(e.ts * 1000).toISOString().slice(11, 19)}Z</span>
+      ${esc(e.label)} <span class="isr-mono">${e.track}</span> <span class="isr-muted">${e.cot ? (e.cot.queued ? "CoT " + esc(e.cot.type) : "no CoT: " + esc(e.cot.error || "")) : ""}${e.mesh ? (e.mesh.sent ? ", mesh sent" : ", mesh not sent") : ""}</span></li>`).join("");
   kv($("sceneInfo"), [["Order tried", (v.chain || []).join(", ")], ["In use", SCENE[v.active] || v.active], ["Model", v.model || ""]]);
   $("periodic").disabled = !v.enabled;
   if (document.activeElement !== $("periodic")) {
@@ -313,6 +333,24 @@ function renderStatus(s) {
   $("meshRx").innerHTML = rx.map(x => `<li><b>${esc(x.from_short || x.from || "?")}</b> ${esc(x.text)} <span class="isr-muted">${ago(x.ts)}</span></li>`).join("");
   if (!jobId && s.jobs && s.jobs.length) { const j = s.jobs[s.jobs.length - 1]; if (j.state === "running") watchJob(j.id); }
 }
+
+// ---------------------------------------------------------------- Air watch
+function renderAir(a) {
+  if (document.activeElement !== $("airToggle")) $("airToggle").checked = !!a.on;
+  $("airState").textContent = a.on ? `${a.fps || 0} per second` : a.available === false ? "not downloaded" : "";
+  const drones = (a.tracks || []).filter(t => t.label !== "bird").sort((x, y) => (y.label === "drone") - (x.label === "drone")).slice(0, 3);
+  $("airTracks").innerHTML = drones.map(t => `<li><span class="name">${esc(t.label[0].toUpperCase() + t.label.slice(1))} <span class="isr-mono">${t.track}</span>
+      <span class="isr-muted isr-mono">${t.conf.toFixed(2)}</span></span>
+      <button class="isr-btn${t.hostile ? "" : " danger"}" data-track="${t.track}" data-hostile="${t.hostile ? 0 : 1}">${t.hostile ? "Clear" : "Mark hostile"}</button></li>`).join("");
+  $("airTracks").querySelectorAll("button").forEach(b => b.onclick = () =>
+    api("/api/air/mark", { track: Number(b.dataset.track), hostile: b.dataset.hostile === "1" }).then(poll).catch(() => {}));
+}
+$("airToggle").onchange = async () => {
+  const on = $("airToggle").checked;
+  if (on) say($("srcMsg"), "Loading Air watch…");
+  try { await api("/api/air", { on }); say($("srcMsg"), ""); poll(); }
+  catch (e) { $("airToggle").checked = false; say($("srcMsg"), "Air watch is not downloaded on this Mac. While online, run scripts/run-laptop.sh --setup-only.", false); }
+};
 
 // ---------------------------------------------------------------- source picker
 function liveLabel(l) {

@@ -30,6 +30,7 @@ from fpv_vision.detector import Detection, Detector
 from fpv_vision.sources import VideoSource
 
 log = logging.getLogger(__name__)
+AIR_COCO = {4, 14, 33}  # COCO airplane, bird, kite: replaced by Air watch classes when it is on
 
 MIN_TRACK_HITS = 3  # a track must be seen this many times before it is counted
 
@@ -59,6 +60,7 @@ class TrackCounter:
         self._hits: dict[int, int] = defaultdict(int)
         self._votes: dict[int, dict[str, list]] = {}  # track -> label -> [conf sum, n, cls_id]
         self._counted: set[int] = set()
+        self.just_counted: list[int] = []  # tracks that reached min_hits in the last update()
         self.untracked_peak: dict[str, int] = defaultdict(int)
 
     def voted(self, track_id: int) -> tuple[int, str, float]:
@@ -73,6 +75,7 @@ class TrackCounter:
         """Record this frame's detections; return them relabelled with each track's voted class."""
         untracked: dict[str, int] = defaultdict(int)
         out = []
+        self.just_counted = []
         for d in dets:
             if d.track_id is None:
                 cls_id, label = _fold(d.label, d.cls_id, d.conf)
@@ -85,6 +88,7 @@ class TrackCounter:
             v[1] += 1
             if d.track_id not in self._counted and self._hits[d.track_id] >= self.min_hits:
                 self._counted.add(d.track_id)
+                self.just_counted.append(d.track_id)
             cls_id, label, _ = self.voted(d.track_id)
             out.append(d if label == d.label else Detection(cls_id, label, d.conf, d.xyxy, d.track_id))
         for k, n in untracked.items():
@@ -199,11 +203,19 @@ class Pipeline:
         self._annotated: np.ndarray | None = None
         self._threads: list[threading.Thread] = []
         self.hud_mode = "LOCAL"
+        # Air watch (fpv_vision.air): a second, open-vocabulary detector on its own thread
+        self.air = None  # AirDetector once loaded
+        self.air_on = False
+        self.air_counter = TrackCounter()
+        self.air_hostile: set[int] = set()  # air track ids the operator marked hostile
+        self.air_stats = {"fps": 0.0, "ms": 0.0}
+        self.on_air_track = None  # callback(Detection) when an air track is first counted
+        self._air_dets: list[Detection] = []
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> "Pipeline":
         self.source.start()
-        for target, name in ((self._detect_loop, "detect"), (self._render_loop, "render")):
+        for target, name in ((self._detect_loop, "detect"), (self._render_loop, "render"), (self._air_loop, "air")):
             t = threading.Thread(target=target, name=name, daemon=True)
             t.start()
             self._threads.append(t)
@@ -223,7 +235,12 @@ class Pipeline:
         old.stop()
         with self._lock:
             self._dets = []
+            self._air_dets = []
         self.detector.reset_tracks()
+        if self.air is not None:
+            self.air.reset_tracks()
+        self.air_counter.reset()
+        self.air_hostile.clear()
         log.info("switched source to %s", source.spec.raw)
 
     # ------------------------------------------------------------ accessors
@@ -239,7 +256,11 @@ class Pipeline:
 
     def current_detections(self) -> tuple[list[Detection], tuple[int, int]]:
         with self._lock:
-            return list(self._dets), self._dets_frame_shape
+            return list(self._dets) + (list(self._air_dets) if self.air_on else []), self._dets_frame_shape
+
+    def air_detections(self) -> list[Detection]:
+        with self._lock:
+            return list(self._air_dets) if self.air_on else []
 
     def current_counts(self) -> dict[str, int]:
         dets, _ = self.current_detections()
@@ -273,6 +294,8 @@ class Pipeline:
             dt = time.perf_counter() - t0
             if src is not self.source:  # source switched mid-inference
                 continue
+            if self.air_on:  # the air model owns aircraft and birds; avoid double boxes
+                dets = [d for d in dets if d.cls_id not in AIR_COCO]
             dets = self.counter.update(dets)  # one voted class per track
             with self._lock:
                 self._dets = dets
@@ -300,6 +323,57 @@ class Pipeline:
             elif gap:
                 self._stop.wait(gap)
 
+    def _air_loop(self) -> None:
+        """Air watch at up to settings.air_fps on the newest frame; never blocks the main detector."""
+        last_id, n, t_window = -1, 0, time.time()
+        while not self._stop.is_set():
+            air, src = self.air, self.source
+            if not (self.air_on and air is not None and self.running):
+                with self._lock:
+                    self._air_dets = []
+                self._stop.wait(0.2)
+                continue
+            fid, frame, _ = src.latest()
+            if frame is None or fid == last_id:
+                time.sleep(0.005)
+                continue
+            last_id = fid
+            t0 = time.perf_counter()
+            try:
+                dets = air.detect(frame)
+            except Exception as e:  # noqa: BLE001
+                log.exception("air watch error: %s", e)
+                self._stop.wait(1.0)
+                continue
+            dt = time.perf_counter() - t0
+            if src is not self.source:
+                continue
+            dets = self.air_counter.update(dets)
+            with self._lock:
+                self._air_dets = dets
+            if self.on_air_track:
+                by_id = {d.track_id: d for d in dets}
+                for tid in self.air_counter.just_counted:
+                    if tid in by_id:
+                        try:
+                            self.on_air_track(by_id[tid])
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("air track callback failed: %s", e)
+            self.air_stats["ms"] = round(dt * 1000, 1)
+            n += 1
+            if time.time() - t_window >= 2.0:
+                self.air_stats["fps"] = round(n / (time.time() - t_window), 1)
+                n, t_window = 0, time.time()
+            period = 1.0 / max(0.5, self.settings.air_fps)
+            if dt < period:
+                self._stop.wait(period - dt)
+
+    def set_air(self, on: bool) -> None:
+        self.air_on = bool(on) and self.air is not None
+        if not self.air_on:
+            with self._lock:
+                self._air_dets = []
+
     def _render_loop(self) -> None:
         last_id = -1
         n, t_window = 0, time.time()
@@ -319,7 +393,7 @@ class Pipeline:
                 continue
             last_id = fid
             with self._lock:
-                dets = list(self._dets)
+                dets = list(self._dets) + (list(self._air_dets) if self.air_on else [])
                 dshape = self._dets_frame_shape
                 dets_ts = self._dets_ts
             out = annotate.resize_to_width(frame, self.settings.stream_width)
@@ -336,7 +410,7 @@ class Pipeline:
             if counts:
                 hud.append("  ".join(f"{k}:{v}" for k, v in sorted(counts.items())))
             annotate.draw(out, dets, hud if self.settings.show_hud else None, recording=self.recorder.active,
-                          badge=self._badge(src))
+                          badge=self._badge(src), alert_tracks=self.air_hostile)
             t_enc = time.time()
             jpeg = annotate.encode_jpeg(out, self.settings.jpeg_quality)
             done = time.time()

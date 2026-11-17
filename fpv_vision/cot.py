@@ -15,7 +15,7 @@ CotSender = TakClient
 def spot_report_cot(*, lat: float, lon: float, callsign: str, remarks: str, uid: str | None = None,
                     cot_type: str = "a-u-G", stale_s: int = 3600, ce: float = 50.0,
                     sender: str = "FPV-VISION", sender_uid: str | None = None, sender_callsign: str | None = None,
-                    now: float | None = None) -> str:
+                    now: float | None = None, how: str = "h-e") -> str:
     """A ground marker at an *operator-entered* position (how="h-e": human entered).
 
     Built so OpenTAKServer 1.8.3 both relays AND stores it (contract C5.5):
@@ -42,7 +42,7 @@ def spot_report_cot(*, lat: float, lon: float, callsign: str, remarks: str, uid:
     detail.append("<archive/>")
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        f'<event version="2.0" uid={quoteattr(uid)} type={quoteattr(cot_type)} how="h-e" '
+        f'<event version="2.0" uid={quoteattr(uid)} type={quoteattr(cot_type)} how={quoteattr(how)} '
         f'time="{t}" start="{t}" stale="{iso(now + stale_s)}">'
         f'<point lat="{lat:.7f}" lon="{lon:.7f}" hae="9999999.0" ce="{ce:.1f}" le="9999999.0"/>'
         f"<detail>{''.join(detail)}</detail></event>"

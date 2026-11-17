@@ -5,3 +5,7 @@
 -r requirements.txt
 mss>=9.0                                                  # screen capture source (phone mirroring)
 pyobjc-framework-AVFoundation>=10.0; sys_platform == "darwin"   # camera names + permission prompt
+# Air watch: YOLOE needs Ultralytics' CLIP fork only once, to turn the text prompts into embeddings
+# during --setup-only / --prefetch (they are cached; nothing below is used at run time).
+clip @ git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40
+ftfy>=6.1

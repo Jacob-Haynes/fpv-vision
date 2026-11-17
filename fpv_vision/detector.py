@@ -24,12 +24,14 @@ WATERCRAFT_AIR = {4, 8}  # airplane, boat
 ISR_CLASSES = sorted(PERSON | VEHICLES | WATERCRAFT_AIR)
 
 COCO_NAMES = {
-    0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "airplane", 5: "bus",
+    0: "person", 1: "bicycle", 2: "car", 3: "motorcycle", 4: "aeroplane", 5: "bus",
     6: "train", 7: "truck", 8: "boat",
 }
 
 
 def category(cls_id: int) -> str:
+    if cls_id >= 100:  # Air watch classes (fpv_vision.air)
+        return "air"
     if cls_id in PERSON:
         return "person"
     if cls_id in VEHICLES:
@@ -168,6 +170,7 @@ class YoloDetector(Detector):
         self._model = YOLO(path, task="detect")
         self._lock = threading.Lock()
         self.names: dict[int, str] = dict(getattr(self._model, "names", None) or COCO_NAMES)
+        self.names[4] = "aeroplane"  # British English on screen
         log.info("YOLO loaded: %s (%s on %s) imgsz=%d", path, backend, device, imgsz)
 
     def detect(self, frame: np.ndarray) -> list[Detection]:

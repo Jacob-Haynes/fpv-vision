@@ -147,6 +147,7 @@ def create_app(service) -> FastAPI:
     @app.post("/api/counts/reset")
     async def reset_counts():
         service.pipeline.counter.reset()
+        service.pipeline.air_counter.reset()
         return {"ok": True}
 
     @app.post("/api/snapshot")
@@ -182,6 +183,21 @@ def create_app(service) -> FastAPI:
     @app.post("/api/run")
     async def run(body: dict = Body(...)):
         return service.set_running(bool(body.get("on", True)))
+
+    @app.post("/api/air")
+    async def air_toggle(body: dict = Body(...)):
+        res = await run_in_threadpool(service.set_air, bool(body.get("on", False)))
+        if not res.get("ok"):
+            raise HTTPException(409, res.get("error", "Air watch unavailable"))
+        return res
+
+    @app.post("/api/air/mark")
+    async def air_mark(body: dict = Body(...)):
+        try:
+            track = int(body.get("track"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "track must be a number")
+        return service.mark_air(track, bool(body.get("hostile", True)))
 
     @app.post("/api/hud")
     async def hud(body: dict = Body(...)):

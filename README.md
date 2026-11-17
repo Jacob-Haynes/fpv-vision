@@ -532,6 +532,58 @@ Pi sources:
   - motion blur;
   - COCO classes, which are everyday objects, not military vehicles or camouflage.
 
+## Air watch: drones, helicopters, aeroplanes, birds
+
+COCO has "airplane" but no drone or helicopter, and small drones come out as "bird" or "kite",
+which the normal detector filters out. **Air watch** (`FPV_AIR=1`, or the Air watch tickbox
+under Source) runs a second, open-vocabulary model beside the normal detector, on its own thread:
+
+- **Model and prompts:** YOLOE (`yoloe-26s-seg.pt`, Ultralytics 8.4) prompted with "drone",
+  "quadcopter", "helicopter", "aeroplane", "bird". Quadcopter maps to drone. Bird stays visible,
+  because telling bird from drone is part of the demo.
+- **Tiling:** each pass runs the full frame plus 2×2 overlapping tiles (as in SAHI) in one batch.
+  Boxes cut by an inner tile edge are dropped, and the rest are merged with class-agnostic NMS.
+  ByteTrack then tracks them, and each track keeps one class by confidence-weighted vote.
+- **Rate:** at most `FPV_AIR_FPS` passes per second (default 10), so the video and the normal
+  detector stay smooth. In view, COCO aeroplane, bird and kite are hidden so nothing is boxed twice.
+- **Colours:** drones in APP-6 unknown yellow, hostile red once the operator presses **Mark
+  hostile** (In view). Helicopters and aeroplanes are neutral green, birds muted grey.
+- **Reports:** a new drone, helicopter or aeroplane track sends a CoT marker:
+  - drone `a-u-A-M-F-Q` (`a-h-…` once marked hostile), helicopter `a-u-A-M-H`, aeroplane `a-n-A-C`;
+  - `SIMULATED:` / `RECORDED:` prefixes, as for spot reports;
+  - placed at the **observer's** position (`SENSOR_LAT`/`SENSOR_LON`), because there is no range
+    or bearing; with no position, no CoT is sent.
+  - Drones also send a mesh alert, within the 30 s mesh limit. Birds are shown only.
+- **Offline:** YOLOE needs a 250 MB text encoder only to turn the prompts into embeddings.
+  `--setup-only` downloads the weights, caches the embeddings (11 KB) and deletes the encoder.
+  At run time it needs no network, and it runs on MPS.
+
+**Measured on the HQ M4 Max** on the six demo clips in `~/Desktop/ISR-demo/fpv-vision/air-clips`
+(licences in `CREDITS.txt` there). Frames were sampled 5 per second and scored against
+hand-noted windows of when each object is in view. A "hit" is a sampled frame where the right
+class was boxed; "wrong" is a frame with an air box of a class that isn't there. The fps columns
+are each model on its own: Air watch is one full-frame pass plus 4 tiles. With both running in
+the app, Air watch holds 10 passes per second next to a 19 fps main detector.
+
+| Clip (what is in it) | Stock: hit / miss / wrong | Air watch: hit / miss / wrong | What the drone was called | fps stock / air |
+|---|---|---|---|---|
+| 01 hexacopter climbing into sky (56) | 0 / 56 / 15 | 0 / 56 / 37 | stock: bicycle, aeroplane; air: helicopter | 31 / 16 |
+| 02 small quadcopter over a field (136) | 0 / 136 / 7 | 1 / 135 / 6 | stock: aeroplane; air: aeroplane, once drone | 55 / 30 |
+| 03 quadcopter, then an eagle (169) | 0 / 169 / 31 | 8 / 161 / 32 | stock: aeroplane; air: aeroplane, twice drone | 49 / 30 |
+| 04 helicopter (250) | 0 / 250 / 191 | **189** / 61 / 55 | (stock calls it aeroplane) | 50 / 25 |
+| 05 airliner on approach (48) | 29 / 19 / 0 | 29 / 19 / 3 | | 50 / 30 |
+| 06 distant gulls (63) | 0 / 63 / 0 | 0 / 63 / 0 | (gulls too small for both) | 52 / 31 |
+
+**Honest summary:**
+- Air watch adds helicopters (0 to 189 of 250 frames) and keeps aeroplanes.
+- It does **not** yet name drones reliably. Every open-vocabulary model tried calls multirotors
+  "helicopter" or "aeroplane": YOLOE 26s/26m/26l/11l and YOLO-World v2 s/l/x.
+- Drones are still boxed and tracked as unknown air objects, and the operator can mark them
+  hostile.
+- Distant gulls are below what either model sees at these tile sizes.
+- Fixing drone naming needs visual prompts or a model fine-tuned on drone imagery, not more text
+  prompts.
+
 ## Configuration reference
 
 Configuration comes from the environment (`/etc/fpv-vision.env` on the Pi, or `station.env` /
@@ -553,6 +605,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_INFER_MAX_WIDTH` | 1280 | downscale big frames before inference |
 | `FPV_CONF` / `FPV_ALL_CLASSES` | 0.30 / 0 | |
 | `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 20 / 960 / 75 | (30 / 1280 via run-laptop.sh) |
+| `FPV_AIR` / `FPV_AIR_FPS` | 0 / 10 | Air watch on at start; max Air watch passes per second (also a tickbox under Source) |
 | `FPV_HUD` | 0 | debug text (model, fps, time) burned into the video; also a toggle under Details. The SIM/REC/LIVE badge is always drawn |
 | `FPV_ALLOW_SCREEN` / `FPV_REQUEST_CAMERA` | 1 on macOS / 1 | screen source; macOS camera prompt |
 | `FPV_DATA_DIR` | `/var/lib/fpv-vision` or `./data` | snapshots, clips, models, analysis |
@@ -581,6 +634,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | POST | `/api/record/start\|stop`; GET `/api/clips`, `/media/clips/<file>` | clips (mp4v) |
 | POST | `/api/periodic {seconds}`, `/api/spot-report {…}`, `/api/counts/reset` | |
 | POST | `/api/run {on}`, `/api/hud {on}` | Stop/Start detection and the stream; debug text on the video |
+| POST | `/api/air {on}`, `/api/air/mark {track, hostile}` | Air watch on/off (409 if not downloaded); mark an air track hostile |
 
 ## Development
 

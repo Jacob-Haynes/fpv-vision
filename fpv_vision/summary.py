@@ -67,7 +67,7 @@ def describe(dets: list[Detection], frame_width: int) -> str:
         return "No people or vehicles detected in view."
     people = [d for d in dets if d.category == "person"]
     vehicles = [d for d in dets if d.category == "vehicle"]
-    others = [d for d in dets if d.category == "other"]
+    others = [d for d in dets if d.category in ("other", "air")]
     phrases: list[str] = []
 
     if people and vehicles:

@@ -53,7 +53,7 @@ def short_hostname() -> str:
 
 class Service:
     def __init__(self, settings, pipeline: Pipeline, describer: SceneDescriber, tak: cot.CotSender, mesh: MeshBus,
-                 detector_factory=None):
+                 detector_factory=None, air_factory=None):
         self.settings = settings
         self.pipeline = pipeline
         self.describer = describer
@@ -67,6 +67,11 @@ class Service:
         self._stop = threading.Event()
         self._periodic_thread: threading.Thread | None = None
         self.started = time.time()
+        # Air watch
+        self.air_factory = air_factory or self._default_air_factory
+        self.air_error = ""
+        self.air_events: list[dict] = []  # newest first: what was reported for each new air track
+        pipeline.on_air_track = self._on_air_track
 
     def start(self) -> "Service":
         self._periodic_thread = threading.Thread(target=self._periodic_loop, name="periodic", daemon=True)
@@ -77,6 +82,100 @@ class Service:
         self._stop.set()
         for j in self.jobs.values():
             j.cancel()
+
+    # ------------------------------------------------------------ Air watch
+    def _default_air_factory(self):
+        from fpv_vision import air
+        from fpv_vision.detector import select_device
+
+        return air.AirDetector(self.settings.models_dir, select_device(self.settings.device))
+
+    def set_air(self, on: bool) -> dict:
+        """Turn Air watch on/off. The model loads on first use (a second or two)."""
+        if on and self.pipeline.air is None:
+            try:
+                self.pipeline.air = self.air_factory()
+                self.air_error = ""
+            except Exception as e:  # noqa: BLE001 - missing weights offline is expected
+                self.air_error = str(e)
+                log.warning("air watch unavailable: %s", e)
+                return {"ok": False, "air": False, "error": self.air_error}
+        self.pipeline.set_air(on)
+        return {"ok": True, "air": self.pipeline.air_on}
+
+    def current_provenance(self) -> str:
+        return self.provenance_of({"source": self.pipeline.source.spec.raw})
+
+    def _air_cot(self, d, hostile: bool = False) -> dict:
+        from fpv_vision import air
+
+        typ = air.cot_type(d.label, hostile)
+        if typ is None:
+            return {"queued": False, "error": "not reported"}
+        lat_lon = None
+        pos = self.default_position()
+        if pos:
+            try:
+                lat_lon = geo.parse_position(pos)
+            except (ValueError, geo.PositionError):
+                lat_lon = None
+        if not lat_lon:
+            return {"queued": False, "error": "no observer position (set SENSOR_LAT/SENSOR_LON)"}
+        tid = d.track_id % air.TRACK_ID_OFFSET
+        prov = self.current_provenance()
+        what = ("hostile " if hostile else "") + d.label
+        remarks = (f"{spotrep.PROVENANCE_COT.get(prov, '')}Air watch: {what} seen by {self.tak.callsign} at "
+                   f"{spotrep.dtg()}, track {tid}, confidence {d.conf:.2f}. The position is the observer's, "
+                   "not the target's: no range or bearing.")
+        xml = cot.spot_report_cot(lat=lat_lon[0], lon=lat_lon[1], callsign=f"{d.label.capitalize()} {tid}",
+                                  remarks=remarks, uid=f"{self.tak.uid}-air-{tid}", cot_type=typ, stale_s=300,
+                                  ce=1000.0, sender_uid=self.tak.uid, sender_callsign=self.tak.callsign, how="m-g")
+        queued = self.tak.send(xml)
+        return {"queued": queued, "type": typ, "error": None if queued else self.tak.last_error}
+
+    def _on_air_track(self, d) -> None:
+        """A new air track was counted: CoT for drones, helicopters and aeroplanes; mesh alert for drones."""
+        from fpv_vision import air
+
+        ev = {"ts": time.time(), "track": d.track_id % air.TRACK_ID_OFFSET, "label": d.label,
+              "conf": round(d.conf, 2), "provenance": self.current_provenance()}
+        if d.label != "bird":
+            ev["cot"] = self._air_cot(d)
+        if d.label == "drone":
+            text = (f"{spotrep.PROVENANCE_MESH.get(ev['provenance'], '')}Air watch: drone seen by "
+                    f"{self.tak.callsign} {spotrep.dtg()}")[:199]
+            sent = self.mesh.send(text)
+            ev["mesh"] = {"sent": sent, "text": text, "error": None if sent else self.mesh.last_error}
+        self.air_events = [ev, *self.air_events][:20]
+        log.info("air watch: new %s track %s %s", d.label, ev["track"], {k: ev[k] for k in ("cot", "mesh") if k in ev})
+
+    def mark_air(self, track: int, hostile: bool) -> dict:
+        """Operator marks an air track hostile (red box, hostile CoT for a drone) or clears it."""
+        from fpv_vision import air
+
+        tid = int(track) % air.TRACK_ID_OFFSET + air.TRACK_ID_OFFSET
+        (self.pipeline.air_hostile.add if hostile else self.pipeline.air_hostile.discard)(tid)
+        d = next((x for x in self.pipeline.air_detections() if x.track_id == tid), None)
+        out = {"ok": True, "track": tid % air.TRACK_ID_OFFSET, "hostile": hostile}
+        if d is not None and d.label != "bird":
+            out["cot"] = self._air_cot(d, hostile=hostile)
+        return out
+
+    def air_status(self) -> dict:
+        from fpv_vision import air
+
+        p = self.pipeline
+        dets = p.air_detections()
+        return {
+            "on": p.air_on, "loaded": p.air is not None,
+            "available": p.air is not None or air.available(self.settings.models_dir),
+            "error": self.air_error, "fps": p.air_stats["fps"], "ms": p.air_stats["ms"],
+            "model": p.air.info() if p.air is not None else None,
+            "tracks": [{"track": d.track_id % air.TRACK_ID_OFFSET, "label": d.label, "conf": round(d.conf, 2),
+                        "hostile": d.track_id in p.air_hostile} for d in dets if d.track_id is not None],
+            "totals": p.air_counter.snapshot(),
+            "events": self.air_events[:5],
+        }
 
     # ------------------------------------------------------------ describe
     def describe(self, mode: str = "auto", note: str = "") -> dict:
@@ -401,7 +500,8 @@ class Service:
                 "latency_ms": round(p.stats.pipeline_ms + p.stats.box_lag_ms, 1),
             },
             "counts": summary.count_by_label(dets),
-            "totals": p.counter.snapshot(),
+            "totals": {**p.counter.snapshot(), **p.air_counter.snapshot()},
+            "air": self.air_status(),
             "live_summary": summary.describe(dets, shape[1] or 1) if shape[1] else "",
             "last_summary": self.last_summary,
             "hud": self.settings.show_hud,

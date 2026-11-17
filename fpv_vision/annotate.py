@@ -18,6 +18,8 @@ def _bgr(hex_rgb: str) -> tuple[int, int, int]:
 # into the video; change them here, nowhere else.
 UNKNOWN = _bgr("#ffff80")  # APP-6 unknown: every detection box
 HOSTILE = _bgr("#ff8080")  # APP-6 hostile: reserved for detections that raise an alert (none do yet)
+NEUTRAL = _bgr("#aaffaa")  # APP-6 neutral: Air watch helicopters and aeroplanes
+MUTED = _bgr("#868b85")  # kit muted grey: Air watch birds (shown, never reported)
 TEXT = _bgr("#dcdcd4")  # off-white label text
 TAG_BG = _bgr("#0e1012")  # graphite, drawn semi-transparent behind text
 TAG_ALPHA = 0.7
@@ -36,6 +38,21 @@ def _tag(img: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> None:
         return
     roi = img[y0:y1, x0:x1]
     roi[:] = cv2.addWeighted(roi, 1 - TAG_ALPHA, np.full_like(roi, TAG_BG), TAG_ALPHA, 0)
+
+
+AIR_NEUTRAL_LABELS = {"helicopter", "aeroplane"}
+
+
+def box_colour(d: Detection, alert_tracks: set[int] | None = None) -> tuple[int, int, int]:
+    """Kit palette per detection: hostile if marked, Air watch aircraft neutral, birds muted, else unknown."""
+    if alert_tracks and d.track_id in alert_tracks:
+        return HOSTILE
+    if d.cls_id >= 100:  # Air watch classes (fpv_vision.air)
+        if d.label in AIR_NEUTRAL_LABELS:
+            return NEUTRAL
+        if d.label == "bird":
+            return MUTED
+    return UNKNOWN
 
 
 def _badge_colour(badge: str) -> tuple[int, int, int]:
@@ -65,10 +82,11 @@ def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
     thick = 2 if w >= 1280 else 1  # 1-2 px boxes
     fs = 0.4 * max(1.0, w / 1280)  # small labels
     for d in dets:
-        c = HOSTILE if alert_tracks and d.track_id in alert_tracks else UNKNOWN
+        c = box_colour(d, alert_tracks)
         x1, y1, x2, y2 = d.xyxy
         cv2.rectangle(img, (x1, y1), (x2, y2), c, thick)
-        tag = f"{d.label}{f' {d.track_id}' if d.track_id is not None else ''} {d.conf:.2f}"
+        tid = d.track_id % 1_000_000 if d.track_id is not None else None  # Air watch ids are offset
+        tag = f"{d.label}{f' {tid}' if tid is not None else ''} {d.conf:.2f}"
         (tw, th), _ = cv2.getTextSize(tag, FONT, fs, 1)
         ty = max(th + 4, y1)
         _tag(img, x1, ty - th - 5, x1 + tw + 6, ty)

@@ -171,6 +171,13 @@ def prefetch(settings: Settings) -> int:
             print(f"model {model}: MISSING ({e})")
             return 1
     print(f"model {model}: {path} ({backend}, {device})")
+    from fpv_vision import air
+
+    try:
+        print(f"air watch: {air.prefetch(settings.models_dir)} (prompts cached; runs offline)")
+    except Exception as e:  # noqa: BLE001
+        print(f"air watch: MISSING ({e})")
+        ok = False
     return 0 if ok else 1
 
 
@@ -240,6 +247,10 @@ def main(argv=None) -> int:
     mesh = MeshBus(settings.mqtt_host, settings.mqtt_port, settings.mqtt_user, settings.mqtt_pass,
                    enabled=settings.mqtt_enabled, mesh_enabled=settings.mesh_enabled)
     service = Service(settings, pipeline, describer, tak, mesh, detector_factory=lambda: build_detector(settings))
+    if settings.air:  # FPV_AIR=1
+        res = service.set_air(True)
+        if not res["ok"]:
+            log.warning("FPV_AIR=1 but Air watch is unavailable: %s", res["error"])
     mesh.heartbeat_fn = service.heartbeat
     mesh.start()
     service.start()
