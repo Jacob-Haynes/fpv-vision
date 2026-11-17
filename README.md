@@ -117,7 +117,7 @@ by index with DirectShow.
 
 ## Replay as live
 
-Pick footage in the **Footage** panel (tick one or more files, then press **▶ Replay ticked**),
+Pick a clip (or **All clips, looped**) in the **Source** list and press **Start**,
 or start with `--replay ~/Movies/FPV/a.mp4 ~/Movies/FPV/b.mp4`, or set
 `FPV_SOURCE=replay:/path/a.mp4|/path/folder`.
 
@@ -216,7 +216,7 @@ video hacks) is deliberately not used.
 - **What resolution arrives (other setups):** GoPro doesn't publish the HERO4's live-preview HDMI resolution.
   The manual only says HDMI is certified up to 1080p. One forum user saw 720×480 from a HERO4 on
   their capture setup, and others report 1080p. **The UI shows what the card actually
-  negotiated** (source pill and "device mode …, receiving N fps"). If it reads 720×480, set the
+  negotiated** (status pill › Video, and Details › Source › Device mode / Receiving). If it reads 720×480, set the
   camera to a 1080p video mode, unplug and replug the HDMI cable, and check again.
 - **Capture defaults:** fpv-vision asks cameras and capture cards for **1920×1080 at 60 fps**
   (`FPV_CAPTURE_WIDTH/HEIGHT/FPS`). On Linux and Windows it requests **MJPEG**, which needs
@@ -252,7 +252,7 @@ In the UI's **Post-flight analysis** panel, enter a path (the mounted SD card fo
   base64 `image_url`. This works with **no internet**.
 - If the selected backend is unreachable, the fallback order is: **openai_compat → gemini (only
   if `GEMINI_API_KEY` is set) → off** (local detector summary such as "2 people near a car, left
-  of frame"). The header pill shows the active backend, and each summary is labelled with what
+  of frame"). The status pill's **AI** line shows the active backend, and each summary is labelled with what
   produced it.
 - `auto` picks `openai_compat` when `VLM_URL` is set, else `gemini` with a key, else `off`.
 - Rate limit: `VLM_MIN_INTERVAL` (3 s) for the local VLM, `GEMINI_MIN_INTERVAL` (10 s) for
@@ -367,7 +367,8 @@ Spot-report markers are also built so OTS **stores** them, which puts them on OT
 - `<link>` only to our own registration uid, with `parent_callsign` and `precisionlocation`
   set to USER for the operator-entered position.
 
-The header pill reads "TAK registered as FPV <host>" once the SA has gone out. The tests in
+The status pill's **TAK** line reads "connected" once the SA has gone out (Details › TAK and mesh
+shows the callsign and uid). The tests in
 `tests/test_tak_client.py` run against a fake OTS (`tests/fake_ots.py`) that enforces all
 three rules.
 
@@ -420,13 +421,13 @@ the wrong place.
 About 10 minutes, in the office. The Drone-ops Mac runs fpv-vision; the audience watches it on
 the big screen or on a tablet at `http://isr-droneops.local:8110`.
 
-1. **Frame it (1 min).** Point at the header and the badge in the top-right of the video:
-   **REPLAY** means real footage from our own flights, replayed in real time. Then point at the
-   detector pill (`yolo26s · pytorch/mps`): "on the laptop's GPU, no cloud".
+1. **Frame it (1 min).** Point at the **REC** tag on the video: real footage from our own
+   flights, replayed in real time (**SIM** = sample clip, **LIVE** = capture card). Click the
+   status pill to show Detector `yolo26s on mps`: "on the laptop's GPU, no cloud".
 2. **Replay as live (3 min).** Play a playlist of 2–3 flights. Show boxes, track IDs and the
-   *unique* count compared with *in view*. Point at the tiles: 60 fps source, detect fps, about
-   40 ms latency. Scrub to an interesting moment and pause on it.
-3. **Describe (1 min).** Press **Describe scene**. The pill shows `scene: VLM qwen3-vl:8b-instruct`
+   *unique* count compared with *in view*. Open Details › Performance: 60 fps source, detect fps,
+   about 40 ms latency. Scrub to an interesting moment and pause on it.
+3. **Describe (1 min).** Press **Describe scene**. The status pill's AI line shows `qwen3-vl:8b-instruct`
    (running on the HQ Mac, offline). Then quit Ollama on the HQ Mac to show it fall back to the local
    summary.
 4. **Report (2 min).** Select the snapshot, enter the observer's grid, and press **Send
@@ -444,7 +445,8 @@ Reset between groups with **Reset counts**.
 
 **Failure drills:**
 
-- No TAK or MQTT: the pills go amber and spot reports queue or report "not sent". Video carries on.
+- No TAK or MQTT (no Pi): the status pill reads **Degraded** (TAK and MQTT are optional) and spot
+  reports queue or report "not sent". Video carries on.
 - No HQ Mac: scene description falls back to the local summary.
 - No footage: it falls back to the sample clip.
 
@@ -579,7 +581,7 @@ Code layout (`fpv_vision/`):
 | `mesh.py` | MQTT: mesh texts and the heartbeat |
 | `cot.py`, `spotrep.py`, `geo.py` | ATAK output, SALUTE reports, MGRS |
 | `service.py` | glue between the parts |
-| `web/` | web UI |
+| `web/` | web UI (shared ISR kit look: `static/isr-ui.css` and `isr-ui.js`, vendored unchanged from `ui-kit/`) |
 
 ## License
 

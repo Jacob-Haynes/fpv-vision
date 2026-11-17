@@ -141,7 +141,8 @@ def test_status_and_counts(app_client):
 
 def test_index_and_frame(app_client):
     client, _ = app_client
-    assert "FPV VISION" in client.get("/").text
+    html = client.get("/").text
+    assert "<h1>FPV vision</h1>" in html and 'id="isr-status"' in html
     r = client.get("/frame.jpg")
     assert r.status_code == 200 and r.content[:2] == b"\xff\xd8"
 
@@ -212,3 +213,22 @@ def test_null_detector_pipeline_streams(settings):
         assert p.current_detections()[0] == []
     finally:
         p.stop()
+
+
+# sha256 of ui-kit/isr-ui.{css,js} v1: the served copies must be the kit files, unchanged
+ISR_UI_SHA256 = {
+    "isr-ui.css": "4e19df9824145ead677fc30dfa28eb802294151ee16e3c4046545c6d9ce89666",
+    "isr-ui.js": "a0b67a8409914a0376be7e2f51d7d4cca0fd86f7ab7ea25f048aa855cb9b1fb9",
+}
+
+
+def test_page_uses_shared_isr_ui_kit(app_client):
+    import hashlib
+
+    client, _ = app_client
+    html = client.get("/").text
+    assert '<link rel="stylesheet" href="/isr-ui.css">' in html and '<script src="/isr-ui.js"></script>' in html
+    for name, sha in ISR_UI_SHA256.items():
+        r = client.get("/" + name)
+        assert r.status_code == 200 and hashlib.sha256(r.content).hexdigest() == sha, name
+    assert "text/css" in client.get("/isr-ui.css").headers["content-type"]
