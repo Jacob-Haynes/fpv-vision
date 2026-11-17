@@ -9,10 +9,14 @@
 # ~/.config/isr-kit/station.env first). Exits cleanly on SIGTERM/Ctrl-C.
 set -euo pipefail
 
+# Started from a launcher (start-mac.sh, launchd) PATH can be bare: find uv and Homebrew's Python anyway.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
-VENV="$REPO/.venv"
+VENV="${FPV_VENV:-$REPO/.venv}"
 REQ="$REPO/requirements-desktop.txt"
+UV="${FPV_UV:-$(command -v uv 2>/dev/null || true)}"
 
 pick_python() {
     for p in python3.12 python3.11 python3.13 python3; do
@@ -23,28 +27,87 @@ pick_python() {
     return 1
 }
 
+pip_install() {  # pip_install <requirements file> [extra uv args...]
+    local file="$1"; shift
+    if [ -n "$UV" ]; then
+        "$UV" pip install -q -p "$VENV/bin/python" "$@" -r "$file"
+    elif "$VENV/bin/python" -m pip --version >/dev/null 2>&1; then
+        "$VENV/bin/python" -m pip install -q -r "$file"
+    else
+        echo "[fpv-vision] neither uv nor pip found (a uv-made venv has no pip): install uv, or run with Homebrew on PATH" >&2
+        return 1
+    fi
+}
+
+deps_ok() {  # what fpv-vision needs to start (the rest is optional and reported by the app)
+    "$VENV/bin/python" - <<'PY'
+import importlib.util, sys
+need = ["cv2", "numpy", "fastapi", "uvicorn", "paho.mqtt.client"]
+missing = [m for m in need if importlib.util.find_spec(m.split(".")[0]) is None]
+optional = ["ultralytics", "torch", "lap", "onnxruntime", "mss", "google.genai"] + (["AVFoundation"] if sys.platform == "darwin" else [])
+gone = [m for m in optional if importlib.util.find_spec(m.split(".")[0]) is None]
+if gone:
+    print("[fpv-vision] optional packages missing: " + ", ".join(gone), file=sys.stderr)
+if missing:
+    print("[fpv-vision] required packages missing: " + ", ".join(missing), file=sys.stderr)
+sys.exit(1 if missing else 0)
+PY
+}
+
+flat_reqs() {  # both requirement files as one list, without the -r line
+    cat requirements.txt
+    grep -v '^[[:space:]]*-r[[:space:]]' "$REQ"
+}
+
 setup_venv() {
     if [ ! -x "$VENV/bin/python" ]; then
         echo "[fpv-vision] creating venv in $VENV"
-        if command -v uv >/dev/null 2>&1; then
-            uv venv -q -p 3.11 "$VENV"
+        mkdir -p "$(dirname "$VENV")"
+        if [ -n "$UV" ]; then
+            "$UV" venv -q -p 3.11 "$VENV"
         else
             PY="$(pick_python)" || { echo "Need Python 3.10-3.13 (brew install python@3.12, or install uv)" >&2; exit 1; }
             "$PY" -m venv "$VENV"
         fi
     fi
-    # reinstall only when the requirements change (works offline once installed)
-    local stamp
+    # Install only when the requirements change, and then only the new lines. Offline-safe: demo day
+    # has no internet, so a failed install never stops the tool when what it needs is already there.
+    local stamp prev new ok
     stamp="$VENV/.req-$(cat requirements.txt "$REQ" | shasum | cut -c1-12)"
-    if [ ! -f "$stamp" ]; then
+    prev="$VENV/.req.txt"   # the requirements last installed (both files, flattened)
+    if [ -f "$stamp" ]; then
+        [ -f "$prev" ] || flat_reqs > "$prev"   # venvs from before .req.txt: record what they have
+        return 0
+    fi
+    new="$REQ"
+    if [ -f "$prev" ] && ls "$VENV"/.req-* >/dev/null 2>&1; then
+        new="$(mktemp "${TMPDIR:-/tmp}/fpv-req.XXXXXX")"
+        flat_reqs | grep -vxF -f "$prev" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' > "$new" || true
+    fi
+    ok=0
+    if [ "$new" != "$REQ" ] && [ ! -s "$new" ]; then
+        echo "[fpv-vision] requirements changed, nothing new to install"
+        ok=1
+    else
         echo "[fpv-vision] installing dependencies (first run downloads torch; a few minutes)"
-        if command -v uv >/dev/null 2>&1; then
-            uv pip install -q -p "$VENV/bin/python" -r "$REQ"
-        else
-            "$VENV/bin/python" -m pip install -q --upgrade pip
-            "$VENV/bin/python" -m pip install -q -r "$REQ"
+        if pip_install "$new"; then
+            ok=1
+        elif [ -n "$UV" ] && "$UV" pip install -q --offline -p "$VENV/bin/python" -r "$new"; then
+            echo "[fpv-vision] installed from the local package cache (offline)"
+            ok=1
         fi
-        rm -f "$VENV"/.req-* && touch "$stamp"
+    fi
+    [ "$new" = "$REQ" ] || rm -f "$new"
+    if [ "$ok" = 1 ]; then
+        rm -f "$VENV"/.req-* && touch "$stamp"   # old stamps only: .req.txt has a dot, not a dash
+        flat_reqs > "$prev"
+    elif deps_ok; then
+        echo "[fpv-vision] WARNING: couldn't install the updated requirements (no internet?): starting with what is installed." >&2
+        echo "[fpv-vision]          It retries next start; or run scripts/run-laptop.sh --setup-only on a network." >&2
+    else
+        echo "[fpv-vision] ERROR: the packages fpv-vision needs aren't installed and couldn't be (no internet?)." >&2
+        echo "[fpv-vision]        Connect to a network and run scripts/run-laptop.sh --setup-only." >&2
+        exit 1
     fi
 }
 

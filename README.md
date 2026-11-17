@@ -84,7 +84,13 @@ simulate clip.
 `scripts/run-laptop.sh` (macOS or Linux) does the following:
 
 - Creates `.venv` with `uv` if it is installed, otherwise with Python 3.10–3.13.
-- Installs `requirements-desktop.txt`, and reinstalls only when the requirements change.
+- Installs `requirements-desktop.txt`. When the requirements change it installs only the new
+  lines (it keeps the last installed list in `.venv/.req.txt`). If that fails, it tries
+  `uv pip install --offline` from the local cache. If that fails too, it starts with what is
+  installed as long as the core packages import, warns, and tries again on the next start. So a
+  requirements change never stops the tool on an offline demo day.
+- Puts `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and `~/.cargo/bin` first on `PATH`,
+  so `uv` is found when a launcher starts it with a bare `PATH`.
 - Runs **in the foreground** until SIGTERM or Ctrl-C, then exits cleanly in about 3 s and
   publishes heartbeat `stopped`.
 - Binds `0.0.0.0:8110`.
