@@ -43,6 +43,16 @@ def _tag(img: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> None:
 AIR_NEUTRAL_LABELS = {"helicopter", "aeroplane"}
 
 
+def label_text(d: Detection, sep: str = " - ") -> str:
+    """'Drone - hexacopter' for a named air track (the page uses ' · '), else the plain label.
+    ASCII only: OpenCV's Hershey fonts cannot draw other characters."""
+    if d.cls_id >= 100:
+        base = d.label[:1].upper() + d.label[1:]
+        text = f"{base}{sep}{d.note}" if d.note else base
+        return text.encode("ascii", "ignore").decode() if sep.isascii() else text
+    return d.label
+
+
 def box_colour(d: Detection, alert_tracks: set[int] | None = None) -> tuple[int, int, int]:
     """Kit palette per detection: hostile if marked, Air watch aircraft neutral, birds muted, else unknown."""
     if alert_tracks and d.track_id in alert_tracks:
@@ -86,11 +96,18 @@ def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
         x1, y1, x2, y2 = d.xyxy
         cv2.rectangle(img, (x1, y1), (x2, y2), c, thick)
         tid = d.track_id % 1_000_000 if d.track_id is not None else None  # Air watch ids are offset
-        tag = f"{d.label}{f' {tid}' if tid is not None else ''} {d.conf:.2f}"
+        name = label_text(d)
+        tag = f"{name}{f' {tid}' if tid is not None else ''} {d.conf:.2f}"
         (tw, th), _ = cv2.getTextSize(tag, FONT, fs, 1)
         ty = max(th + 4, y1)
         _tag(img, x1, ty - th - 5, x1 + tw + 6, ty)
         cv2.putText(img, tag, (x1 + 3, ty - 3), FONT, fs, TEXT, 1, cv2.LINE_AA)
+        if d.named_by == "ai":  # small outlined "AI" tag: this name came from the vision model
+            (aw, _), _ = cv2.getTextSize("AI", FONT, fs * 0.9, 1)
+            ax = x1 + tw + 10
+            _tag(img, ax, ty - th - 5, ax + aw + 6, ty)
+            cv2.rectangle(img, (ax, ty - th - 5), (ax + aw + 6, ty), MUTED, 1)
+            cv2.putText(img, "AI", (ax + 3, ty - 3), FONT, fs * 0.9, TEXT, 1, cv2.LINE_AA)
 
     # hud=None: no debug text at all (the default for the live stream); a list adds a UTC time line
     lines = [] if hud is None else [*hud, time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime())]

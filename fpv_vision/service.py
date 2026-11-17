@@ -53,7 +53,7 @@ def short_hostname() -> str:
 
 class Service:
     def __init__(self, settings, pipeline: Pipeline, describer: SceneDescriber, tak: cot.CotSender, mesh: MeshBus,
-                 detector_factory=None, air_factory=None):
+                 detector_factory=None, air_factory=None, namer_client=None):
         self.settings = settings
         self.pipeline = pipeline
         self.describer = describer
@@ -72,6 +72,7 @@ class Service:
         self.air_error = ""
         self.air_events: list[dict] = []  # newest first: what was reported for each new air track
         pipeline.on_air_track = self._on_air_track
+        self.namer_client = namer_client  # tests inject a fake; default: VLM_URL / VLM_MODEL
 
     def start(self) -> "Service":
         self._periodic_thread = threading.Thread(target=self._periodic_loop, name="periodic", daemon=True)
@@ -100,8 +101,22 @@ class Service:
                 self.air_error = str(e)
                 log.warning("air watch unavailable: %s", e)
                 return {"ok": False, "air": False, "error": self.air_error}
+        if on and self.pipeline.air_namer is None:
+            self._start_namer()
         self.pipeline.set_air(on)
         return {"ok": True, "air": self.pipeline.air_on}
+
+    def _start_namer(self) -> None:
+        """The local vision model names air tracks (fpv_vision.air_namer); off when no VLM_URL."""
+        from fpv_vision.air_namer import AirNamer, VlmClient
+
+        client = self.namer_client
+        if client is None:
+            if not self.settings.vlm_url:
+                return
+            client = VlmClient(self.settings.vlm_url, self.settings.vlm_model, self.settings.vlm_api_key, timeout=10.0)
+        self.pipeline.air_namer = AirNamer(client, self.pipeline.air_counter, on_named=self._on_air_named,
+                                           min_conf=self.settings.air_name_conf).start()
 
     def current_provenance(self) -> str:
         return self.provenance_of({"source": self.pipeline.source.spec.raw})
@@ -123,7 +138,7 @@ class Service:
             return {"queued": False, "error": "no observer position (set SENSOR_LAT/SENSOR_LON)"}
         tid = d.track_id % air.TRACK_ID_OFFSET
         prov = self.current_provenance()
-        what = ("hostile " if hostile else "") + d.label
+        what = ("hostile " if hostile else "") + d.label + (f" ({d.note}, named by the vision model)" if d.note else "")
         remarks = (f"{spotrep.PROVENANCE_COT.get(prov, '')}Air watch: {what} seen by {self.tak.callsign} at "
                    f"{spotrep.dtg()}, track {tid}, confidence {d.conf:.2f}. The position is the observer's, "
                    "not the target's: no range or bearing.")
@@ -149,6 +164,28 @@ class Service:
         self.air_events = [ev, *self.air_events][:20]
         log.info("air watch: new %s track %s %s", d.label, ev["track"], {k: ev[k] for k in ("cot", "mesh") if k in ev})
 
+    def _on_air_named(self, tid: int, old: str | None, new: str, detail: str) -> None:
+        """The vision model renamed a track: retype its CoT (same uid), and alert on mesh if it is now a drone."""
+        from fpv_vision import air
+        from fpv_vision.detector import Detection
+
+        p = self.pipeline
+        cur = next((x for x in p.air_detections() if x.track_id == tid), None)
+        cls_id = p.air_counter.voted(tid)[0] if tid in p.air_counter._votes else air.AIR_CONTACT
+        d = Detection(cls_id, new, cur.conf if cur else 0.0, cur.xyxy if cur else (0, 0, 0, 0), tid, note=detail,
+                      named_by="ai")
+        ev = {"ts": time.time(), "track": tid % air.TRACK_ID_OFFSET, "label": new, "detail": detail, "renamed_from": old,
+              "provenance": self.current_provenance(), "named_by": "ai"}
+        if tid in p.air_counter._counted and new != "bird":  # its first CoT went out already: update it
+            ev["cot"] = self._air_cot(d, hostile=tid in p.air_hostile)
+        if new == "drone" and old != "drone" and tid in p.air_counter._counted:
+            text = (f"{spotrep.PROVENANCE_MESH.get(ev['provenance'], '')}Air watch: drone ({detail or 'named by AI'}) "
+                    f"seen by {self.tak.callsign} {spotrep.dtg()}")[:199]
+            sent = self.mesh.send(text)
+            ev["mesh"] = {"sent": sent, "text": text, "error": None if sent else self.mesh.last_error}
+        self.air_events = [ev, *self.air_events][:20]
+        log.info("air watch: track %s named %s (%s), was %s", ev["track"], new, detail, old)
+
     def mark_air(self, track: int, hostile: bool) -> dict:
         """Operator marks an air track hostile (red box, hostile CoT for a drone) or clears it."""
         from fpv_vision import air
@@ -172,7 +209,10 @@ class Service:
             "error": self.air_error, "fps": p.air_stats["fps"], "ms": p.air_stats["ms"],
             "model": p.air.info() if p.air is not None else None,
             "tracks": [{"track": d.track_id % air.TRACK_ID_OFFSET, "label": d.label, "conf": round(d.conf, 2),
+                        "note": d.note, "named_by": d.named_by,
                         "hostile": d.track_id in p.air_hostile} for d in dets if d.track_id is not None],
+            "naming": p.air_namer.status() if p.air_namer is not None else
+            {"enabled": False, "reason": "no VLM_URL: YOLOE names air tracks"},
             "totals": p.air_counter.snapshot(),
             "events": self.air_events[:5],
         }

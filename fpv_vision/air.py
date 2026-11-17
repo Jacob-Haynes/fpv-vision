@@ -32,6 +32,7 @@ PROMPTS = ["drone", "quadcopter", "helicopter", "aeroplane", "bird"]
 # class ids >= AIR_BASE never collide with COCO (0-79); detector.category() calls them "air"
 AIR_BASE = 100
 DRONE, HELICOPTER, AEROPLANE, BIRD = AIR_BASE, AIR_BASE + 1, AIR_BASE + 2, AIR_BASE + 3
+AIR_CONTACT = AIR_BASE + 4  # the vision model looked but could not say (low confidence or "other")
 # prompt -> (cls_id, label shown on screen)
 PROMPT_CLASS = {
     "drone": (DRONE, "drone"),
@@ -40,10 +41,10 @@ PROMPT_CLASS = {
     "aeroplane": (AEROPLANE, "aeroplane"),
     "bird": (BIRD, "bird"),
 }
-LABELS = {DRONE: "drone", HELICOPTER: "helicopter", AEROPLANE: "aeroplane", BIRD: "bird"}
+LABELS = {DRONE: "drone", HELICOPTER: "helicopter", AEROPLANE: "aeroplane", BIRD: "bird", AIR_CONTACT: "air contact"}
 
 # CoT types (MIL-STD-2525 / APP-6 style): unknown UAV, unknown rotary wing, neutral civil fixed wing
-COT_TYPE = {"drone": "a-u-A-M-F-Q", "helicopter": "a-u-A-M-H", "aeroplane": "a-n-A-C"}
+COT_TYPE = {"drone": "a-u-A-M-F-Q", "helicopter": "a-u-A-M-H", "aeroplane": "a-n-A-C", "air contact": "a-u-A"}
 
 TRACK_ID_OFFSET = 1_000_000  # keeps air track ids apart from the main detector's
 

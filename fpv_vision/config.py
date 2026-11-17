@@ -75,7 +75,8 @@ class Settings:
     stream_width: int = 960
     jpeg_quality: int = 75
     air: bool = False  # Air watch: open-vocabulary drone/helicopter/aeroplane/bird detector (FPV_AIR)
-    air_fps: float = 10.0  # max Air watch passes per second (each pass = full frame + 2x2 tiles)
+    air_fps: float = 10.0
+    air_name_conf: float = 0.7  # YOLOE confidence a track needs before the vision model is asked to name it  # max Air watch passes per second (each pass = full frame + 2x2 tiles)
     show_hud: bool = False  # debug text (model, fps, time) burned into the video; the provenance badge is always drawn
 
     # --- replay / footage library ---
@@ -163,6 +164,7 @@ class Settings:
         s.show_hud = _env_bool("FPV_HUD", s.show_hud)
         s.air = _env_bool("FPV_AIR", s.air)
         s.air_fps = _env_float("FPV_AIR_FPS", s.air_fps)
+        s.air_name_conf = _env_float("FPV_AIR_NAME_CONF", s.air_name_conf)
         if _env("FPV_DATA_DIR"):
             s.data_dir = Path(_env("FPV_DATA_DIR"))
         s.footage_dirs = _env("FPV_FOOTAGE_DIRS", s.footage_dirs)

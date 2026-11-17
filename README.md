@@ -558,31 +558,62 @@ under Source) runs a second, open-vocabulary model beside the normal detector, o
   `--setup-only` downloads the weights, caches the embeddings (11 KB) and deletes the encoder.
   At run time it needs no network, and it runs on MPS.
 
+**Naming by the vision model.** YOLOE finds and tracks air objects; the local VLM names them.
+`VLM_URL` / `VLM_MODEL` set the model: qwen3-vl:8b-instruct on Ollama, the same one that
+describes scenes. On the drone-ops Mac, which runs its own Ollama, use
+`VLM_URL=http://localhost:11434`.
+
+- **When:** a non-bird track with YOLOE confidence ≥ 0.7 that has been stable for 0.5 s.
+- **What is sent:** its box with 30 % padding, at least 224 px on the short side, through
+  `/v1/chat/completions` with reasoning off. The prompt asks for JSON:
+  `{"class": "drone|helicopter|aeroplane|bird|other", "confidence": 0-1, "detail": "≤6 words"}`.
+  JSON-schema structured output is used when the server accepts it (Ollama 0.40 with this model
+  does); otherwise the reply is parsed leniently.
+- **The answer replaces the YOLOE vote:**
+  - the label reads "Drone · hexacopter" (the video overlay uses "Drone - hexacopter") with a
+    small **AI** tag;
+  - confidence under 0.5, or "other", gives **Air contact** (APP-6 unknown, CoT `a-u-A`).
+- **Re-asks:** unnamed or low-confidence tracks are re-asked at most twice, at least 3 s apart,
+  with a larger crop.
+- **Limits:** one call in flight, a queue of 3 (newest first), a 10 s timeout. The video and
+  detection loops never wait for it.
+- **VLM unreachable:** the YOLOE vote stays, and the pill's optional **AI naming** check shows
+  "unreachable".
+- **Renamed tracks:** a track first sent as a helicopter or aeroplane and later named a drone sends
+  a CoT update (same uid, new type) and a mesh alert.
+
 **Measured on the HQ M4 Max** on the six demo clips in `~/Desktop/ISR-demo/fpv-vision/air-clips`
-(licences in `CREDITS.txt` there). Frames were sampled 5 per second and scored against
-hand-noted windows of when each object is in view. A "hit" is a sampled frame where the right
-class was boxed; "wrong" is a frame with an air box of a class that isn't there. The fps columns
-are each model on its own: Air watch is one full-frame pass plus 4 tiles. With both running in
-the app, Air watch holds 10 passes per second next to a 19 fps main detector.
+(licences in `CREDITS.txt` there).
 
-| Clip (what is in it) | Stock: hit / miss / wrong | Air watch: hit / miss / wrong | What the drone was called | fps stock / air |
-|---|---|---|---|---|
-| 01 hexacopter climbing into sky (56) | 0 / 56 / 15 | 0 / 56 / 37 | stock: bicycle, aeroplane; air: helicopter | 31 / 16 |
-| 02 small quadcopter over a field (136) | 0 / 136 / 7 | 1 / 135 / 6 | stock: aeroplane; air: aeroplane, once drone | 55 / 30 |
-| 03 quadcopter, then an eagle (169) | 0 / 169 / 31 | 8 / 161 / 32 | stock: aeroplane; air: aeroplane, twice drone | 49 / 30 |
-| 04 helicopter (250) | 0 / 250 / 191 | **189** / 61 / 55 | (stock calls it aeroplane) | 50 / 25 |
-| 05 airliner on approach (48) | 29 / 19 / 0 | 29 / 19 / 3 | | 50 / 30 |
-| 06 distant gulls (63) | 0 / 63 / 0 | 0 / 63 / 0 | (gulls too small for both) | 52 / 31 |
+- **Method:** played in real time at 10 passes per second, as the app does. AI naming used
+  qwen3-vl:8b-instruct on the same Mac's Ollama, sharing the GPU with both YOLO models.
+- **Scoring:** against hand-noted windows of when each object is in view. A "hit" is a pass
+  where the right class was boxed; "wrong" is a pass with an air box of a class that isn't there.
+- **fps:** each model on its own, on a GPU that the VLM was also using.
 
-**Honest summary:**
-- Air watch adds helicopters (0 to 189 of 250 frames) and keeps aeroplanes.
-- It does **not** yet name drones reliably. Every open-vocabulary model tried calls multirotors
-  "helicopter" or "aeroplane": YOLOE 26s/26m/26l/11l and YOLO-World v2 s/l/x.
-- Drones are still boxed and tracked as unknown air objects, and the operator can mark them
-  hostile.
-- Distant gulls are below what either model sees at these tile sizes.
-- Fixing drone naming needs visual prompts or a model fine-tuned on drone imagery, not more text
-  prompts.
+| Clip (passes with the object) | Stock: hit / miss / wrong | Air watch + AI: hit / miss / wrong | Named by AI | First box → name | fps stock / air |
+|---|---|---|---|---|---|
+| 01 hexacopter climbing into sky (111) | 0 / 111 / 33 | **41** / 70 / 34 | drone · hexacopter | 7.9 s | 20 / 9 |
+| 02 small quadcopter over a field (338) | 0 / 338 / 34 | 8 / 330 / 62 | none (no box reached 0.7) | – | 43 / 22 |
+| 03 quadcopter, then an eagle (337) | 0 / 337 / 64 | **85** / 252 / 30 | drone · quadcopter | 3.5 s | 44 / 28 |
+| 04 helicopter (623) | 0 / 623 / 496 | **571** / 52 / 44 | helicopter · crewed rotorcraft (×2) | 3.6–3.7 s | 32 / 11 |
+| 05 airliner on approach (96) | 58 / 38 / 0 | 72 / 24 / 0 | none (both calls timed out at 10 s) | – | 11 / 4 |
+| 06 distant gulls (125) | 0 / 125 / 0 | 0 / 125 / 0 | none (birds are not sent) | – | 22 / 6 |
+
+**With `FPV_AIR_NAME_CONF=0.4`:**
+- More tracks get named. Clip 02's small drone is named "drone · quadcopter" on three tracks
+  (4.6–10.2 s), and the airliner "aeroplane · commercial airliner" (5.3 s).
+- Clip 01's first two calls timed out, so it was named only after 25 s.
+
+**Summary:**
+- The vision model names multirotors correctly (hexacopter, quadcopter) where YOLOE said
+  "helicopter" or "aeroplane", and it agrees on the helicopter and the airliner.
+- Its limits are speed and gating. A name takes about 3–8 s while the GPU is shared, and
+  occasionally longer than the 10 s timeout. The 0.7 confidence gate skips small, distant drones.
+- Distant gulls are below what YOLOE sees, at any threshold.
+
+Without AI naming (stock YOLOE names only), every open-vocabulary model tried called multirotors
+"helicopter" or "aeroplane": YOLOE 26s/26m/26l/11l and YOLO-World v2 s/l/x.
 
 ## Configuration reference
 
@@ -606,6 +637,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_CONF` / `FPV_ALL_CLASSES` | 0.30 / 0 | |
 | `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 20 / 960 / 75 | (30 / 1280 via run-laptop.sh) |
 | `FPV_AIR` / `FPV_AIR_FPS` | 0 / 10 | Air watch on at start; max Air watch passes per second (also a tickbox under Source) |
+| `FPV_AIR_NAME_CONF` | 0.7 | YOLOE confidence a track needs before the vision model is asked to name it (`VLM_URL` empty = no naming) |
 | `FPV_HUD` | 0 | debug text (model, fps, time) burned into the video; also a toggle under Details. The SIM/REC/LIVE badge is always drawn |
 | `FPV_ALLOW_SCREEN` / `FPV_REQUEST_CAMERA` | 1 on macOS / 1 | screen source; macOS camera prompt |
 | `FPV_DATA_DIR` | `/var/lib/fpv-vision` or `./data` | snapshots, clips, models, analysis |

@@ -40,7 +40,8 @@
   #replayBar { display: none; }
   #replayBar input[type=range] { flex: 1 1 200px; min-height: 0; padding: 0; accent-color: var(--muted); }
   #counts li { align-items: center; }
-  #counts .name { flex: 1; text-transform: capitalize; }
+  #counts .name { flex: 1; }
+  #counts .name::first-letter { text-transform: uppercase; }
   .fv-msg { min-height: 1.5em; margin-top: 8px; }
   .fv-msg.bad { color: var(--bad); }
   .fv-below { margin-top: 24px; }
@@ -244,6 +245,10 @@ function checks(s) {
     out.push({ name: "Camera", state: "bad", text: "access denied" });
   out.push({ name: "AI", optional: true, state: v.active === "openai_compat" || v.active === "gemini" ? "ok" : v.selected !== "off" ? "warn" : "idle",
              text: v.active === "openai_compat" ? (v.model || "local") : v.active === "gemini" ? "Gemini (cloud)" : v.selected !== "off" ? "not reachable" : "off" });
+  const nm = (s.air || {}).naming;
+  if ((s.air || {}).on && nm) out.push({ name: "AI naming", optional: true,
+    state: !nm.enabled ? "idle" : nm.reachable ? "ok" : "warn",
+    text: !nm.enabled ? "off (YOLOE names)" : nm.reachable ? (nm.model || "on") : "unreachable (YOLOE names)" });
   out.push({ name: "TAK", optional: true, state: !t.enabled ? "idle" : t.registered ? "ok" : t.connected ? "warn" : "bad",
              text: !t.enabled ? "off" : t.registered ? "connected" : t.connected ? "registering" : "not connected" });
   out.push({ name: "MQTT", optional: true, state: !m.enabled ? "idle" : m.connected ? "ok" : "bad", text: !m.enabled ? "off" : m.connected ? "connected" : "not connected" });
@@ -313,7 +318,9 @@ function renderStatus(s) {
     ["Clip", rp ? `${rp.file} (${rp.index + 1} of ${rp.files.length}), ${rp.fps} fps, ${rp.dropped} frames skipped to stay real-time` : ""],
     ["Crop", src.crop ? src.crop.map(x => x.toFixed(2)).join(", ") : ""], ["Camera access", s.camera_permission], ["Last error", src.error]]);
   const a = s.air || {}, am = a.model || {};
-  kv($("airInfo"), [["State", a.on ? "on" : "off"], ["Model", am.model || (a.available ? "downloaded, loads when switched on" : "not downloaded")],
+  const nmi = a.naming || {};
+  kv($("airInfo"), [["State", a.on ? "on" : "off"],
+    ["AI naming", !nmi.enabled ? (nmi.reason || "off") : `${nmi.model}: ${nmi.named} named, ${nmi.calls} calls, median ${nmi.median_s ?? "–"} s${nmi.reachable ? "" : ", unreachable"}`], ["Model", am.model || (a.available ? "downloaded, loads when switched on" : "not downloaded")],
     ["Prompts", (am.prompts || []).join(", ")], ["Tiles", am.tiles || ""], ["Rate", a.on ? `${a.fps} passes per second, ${a.ms} ms each` : ""],
     ["Reported", "Drones, helicopters and aeroplanes to TAK at the observer's position; drones also on mesh. Birds are shown only."],
     ["Error", a.error ? "Air watch model missing: run --setup-only while online" : ""]]);
@@ -339,7 +346,8 @@ function renderAir(a) {
   if (document.activeElement !== $("airToggle")) $("airToggle").checked = !!a.on;
   $("airState").textContent = a.on ? `${a.fps || 0} per second` : a.available === false ? "not downloaded" : "";
   const drones = (a.tracks || []).filter(t => t.label !== "bird").sort((x, y) => (y.label === "drone") - (x.label === "drone")).slice(0, 3);
-  $("airTracks").innerHTML = drones.map(t => `<li><span class="name">${esc(t.label[0].toUpperCase() + t.label.slice(1))} <span class="isr-mono">${t.track}</span>
+  $("airTracks").innerHTML = drones.map(t => `<li><span class="name">${esc(t.label[0].toUpperCase() + t.label.slice(1))}${t.note ? " · " + esc(t.note) : ""}
+      ${t.named_by === "ai" ? '<span class="isr-tag" title="Named by the vision model">AI</span>' : ""} <span class="isr-mono">${t.track}</span>
       <span class="isr-muted isr-mono">${t.conf.toFixed(2)}</span></span>
       <button class="isr-btn${t.hostile ? "" : " danger"}" data-track="${t.track}" data-hostile="${t.hostile ? 0 : 1}">${t.hostile ? "Clear" : "Mark hostile"}</button></li>`).join("");
   $("airTracks").querySelectorAll("button").forEach(b => b.onclick = () =>

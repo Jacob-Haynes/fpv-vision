@@ -60,12 +60,19 @@ class TrackCounter:
         self._hits: dict[int, int] = defaultdict(int)
         self._votes: dict[int, dict[str, list]] = {}  # track -> label -> [conf sum, n, cls_id]
         self._counted: set[int] = set()
+        self._override: dict[int, tuple[int, str]] = {}  # track -> (cls_id, label) set by the vision model
         self.just_counted: list[int] = []  # tracks that reached min_hits in the last update()
         self.untracked_peak: dict[str, int] = defaultdict(int)
 
     def voted(self, track_id: int) -> tuple[int, str, float]:
-        """(cls_id, label, mean confidence) of a track's winning class, after the bus/train fold."""
+        """(cls_id, label, mean confidence) of a track's winning class, after the bus/train fold.
+
+        A class set by the vision model (:meth:`set_override`) wins over the vote."""
         votes = self._votes[track_id]
+        if track_id in self._override:
+            cls_id, label = self._override[track_id]
+            total, n = sum(v[0] for v in votes.values()), sum(v[1] for v in votes.values())
+            return cls_id, label, total / max(1, n)
         label, (total, n, cls_id) = max(list(votes.items()), key=lambda kv: kv[1][0])
         mean = total / n
         cls_id, label = _fold(label, cls_id, mean)
@@ -94,6 +101,9 @@ class TrackCounter:
         for k, n in untracked.items():
             self.untracked_peak[k] = max(self.untracked_peak[k], n)
         return out
+
+    def set_override(self, track_id: int, cls_id: int, label: str) -> None:
+        self._override[track_id] = (cls_id, label)
 
     @property
     def totals(self) -> dict[str, int]:
@@ -210,6 +220,7 @@ class Pipeline:
         self.air_hostile: set[int] = set()  # air track ids the operator marked hostile
         self.air_stats = {"fps": 0.0, "ms": 0.0}
         self.on_air_track = None  # callback(Detection) when an air track is first counted
+        self.air_namer = None  # fpv_vision.air_namer.AirNamer: the vision model names air tracks
         self._air_dets: list[Detection] = []
 
     # ------------------------------------------------------------ lifecycle
@@ -241,6 +252,8 @@ class Pipeline:
             self.air.reset_tracks()
         self.air_counter.reset()
         self.air_hostile.clear()
+        if self.air_namer is not None:
+            self.air_namer.reset()
         log.info("switched source to %s", source.spec.raw)
 
     # ------------------------------------------------------------ accessors
@@ -349,6 +362,10 @@ class Pipeline:
             if src is not self.source:
                 continue
             dets = self.air_counter.update(dets)
+            namer = self.air_namer
+            if namer is not None:
+                namer.observe(dets, frame)  # cheap: queues crops; naming runs on its own thread
+                dets = namer.apply(dets)
             with self._lock:
                 self._air_dets = dets
             if self.on_air_track:

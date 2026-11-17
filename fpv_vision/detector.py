@@ -46,6 +46,8 @@ class Detection:
     conf: float
     xyxy: tuple[int, int, int, int]
     track_id: int | None = None
+    note: str = ""  # extra detail for the label, e.g. "hexacopter" from the vision model
+    named_by: str = ""  # "ai" when the class came from the vision model (fpv_vision.air_namer)
 
     @property
     def category(self) -> str:
