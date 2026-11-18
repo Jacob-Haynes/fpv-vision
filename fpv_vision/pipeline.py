@@ -18,16 +18,17 @@ import json
 import logging
 import threading
 import time
-from collections import defaultdict
-from dataclasses import dataclass, field
+from collections import defaultdict, deque
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import cv2
 import numpy as np
 
 from fpv_vision import annotate, summary
-from fpv_vision.detector import Detection, Detector
+from fpv_vision.detector import Detection, Detector, category
 from fpv_vision.sources import VideoSource
+from fpv_vision.stable import CAR_REF_MIN, CAR_REF_SAMPLES, TRACKER_PRIOR_HITS, StableConfig, iou
 
 log = logging.getLogger(__name__)
 AIR_COCO = {4, 14, 33}  # COCO airplane, bird, kite: replaced by Air watch classes when it is on
@@ -53,16 +54,30 @@ class TrackCounter:
     detection of it (a white van flickering truck/bus/train stays one truck). Bus and train are only
     kept when their voted mean confidence is at least ``RARE_MIN_CONF``; otherwise they fold into
     truck. ``totals`` counts unique track IDs by voted class, so class flips never add to "seen".
+
+    With a :class:`~fpv_vision.stable.StableConfig` (the ground picture) it also filters and holds
+    tracks so boxes neither lie nor flicker: implausible vehicle boxes are dropped, a track is
+    shown and counted only once confirmed (consecutive detections plus the class confidence
+    floor), a confirmed track keeps one label and coasts on its last box for a moment when
+    missed. Without one (Air watch, and ``FPV_STABLE=0``) it relabels and counts only.
     """
 
-    def __init__(self, min_hits: int = MIN_TRACK_HITS):
+    def __init__(self, min_hits: int = MIN_TRACK_HITS, stable: StableConfig | None = None):
         self.min_hits = min_hits
+        self.stable = stable
         self._hits: dict[int, int] = defaultdict(int)
         self._votes: dict[int, dict[str, list]] = {}  # track -> label -> [conf sum, n, cls_id]
-        self._counted: set[int] = set()
+        self._counted: set[int] = set()  # in the "seen" totals
+        self._confirmed: set[int] = set()  # stable: drawn (counted too once seen min_hits times)
         self._override: dict[int, tuple[int, str]] = {}  # track -> (cls_id, label) set by the vision model
         self.just_counted: list[int] = []  # tracks that reached min_hits in the last update()
         self.untracked_peak: dict[str, int] = defaultdict(int)
+        self._streak: dict[int, int] = {}  # stable: consecutive passes an unconfirmed track was seen
+        self._shown: dict[int, tuple[int, str]] = {}  # stable: the one label a confirmed track shows
+        self._last: dict[int, tuple[Detection, float]] = {}  # stable: last box + time, for coasting
+        self._alias: dict[int, int] = {}  # stable: tracker id -> the held track it took over
+        self._car_areas: deque[int] = deque(maxlen=CAR_REF_SAMPLES)  # stable: recent car box sizes
+        self._search = False  # stable: this pass came from Search (its own class floors)
 
     def voted(self, track_id: int) -> tuple[int, str, float]:
         """(cls_id, label, mean confidence) of a track's winning class, after the bus/train fold.
@@ -78,8 +93,23 @@ class TrackCounter:
         cls_id, label = _fold(label, cls_id, mean)
         return cls_id, label, mean
 
-    def update(self, dets: list[Detection]) -> list[Detection]:
-        """Record this frame's detections; return them relabelled with each track's voted class."""
+    def _vote(self, d: Detection) -> None:
+        self._hits[d.track_id] += 1
+        v = self._votes.setdefault(d.track_id, {}).setdefault(d.label, [0.0, 0, d.cls_id])
+        v[0] += d.conf
+        v[1] += 1
+
+    def update(self, dets: list[Detection], frame_shape: tuple[int, int] | None = None, now: float | None = None,
+               prior_hits: int = 0, search: bool = False) -> list[Detection]:
+        """Record this frame's detections; return them relabelled with each track's voted class.
+
+        With ``stable`` set, return only confirmed tracks (plus coasting ones). ``frame_shape``
+        (h, w) is for the vehicle size check, ``now`` the frame's time, and ``prior_hits`` the
+        consecutive passes a detector has already required before it reports a track (Search);
+        ``search``: these came from Search, so its class floors apply."""
+        if self.stable is not None:
+            self._search = search
+            return self._update_stable(dets, frame_shape, time.time() if now is None else now, prior_hits)
         untracked: dict[str, int] = defaultdict(int)
         out = []
         self.just_counted = []
@@ -89,10 +119,7 @@ class TrackCounter:
                 untracked[label] += 1
                 out.append(Detection(cls_id, label, d.conf, d.xyxy, None) if label != d.label else d)
                 continue
-            self._hits[d.track_id] += 1
-            v = self._votes.setdefault(d.track_id, {}).setdefault(d.label, [0.0, 0, d.cls_id])
-            v[0] += d.conf
-            v[1] += 1
+            self._vote(d)
             if d.track_id not in self._counted and self._hits[d.track_id] >= self.min_hits:
                 self._counted.add(d.track_id)
                 self.just_counted.append(d.track_id)
@@ -102,6 +129,117 @@ class TrackCounter:
             self.untracked_peak[k] = max(self.untracked_peak[k], n)
         return out
 
+    def _update_stable(self, dets: list[Detection], frame_shape, now: float, prior_hits: int) -> list[Detection]:
+        cfg = self.stable
+        self.just_counted = []
+        seen: dict[int, Detection] = {}
+        fresh = []
+        for d in dets:
+            if d.label == "car":
+                self._car_areas.append((d.xyxy[2] - d.xyxy[0]) * (d.xyxy[3] - d.xyxy[1]))
+        car_area = float(np.median(self._car_areas)) if len(self._car_areas) >= CAR_REF_MIN else 0.0
+        held: dict[int, list[Detection]] = defaultdict(list)
+        for d in dets:
+            # no track id: nothing to confirm it against (ByteTrack only reports activated tracks)
+            if d.track_id is None or not cfg.plausible(d, frame_shape, car_area):
+                continue
+            tid = self._alias.get(d.track_id, d.track_id)
+            (held[tid] if tid in self._confirmed else fresh).append(d)
+        for tid, ds in held.items():
+            # the track's own id first; an id that took it over while it was missed, and now
+            # turns out to be a different object beside it, becomes its own track (already shown,
+            # so confirmed at once, with the same label) rather than lose its box
+            ds.sort(key=lambda d: d.track_id != tid)
+            seen[tid] = replace(ds[0], track_id=tid)
+            for d in ds[1:]:
+                if d.track_id in seen:
+                    continue
+                self._alias.pop(d.track_id, None)
+                self._confirmed.add(d.track_id)
+                self._shown[d.track_id] = self._shown.get(tid, (d.cls_id, d.label))
+                seen[d.track_id] = d
+        for d in fresh:
+            # the tracker gave a held object a new id (a blur, a pan): the new id takes over the old
+            # track, its label and its count, instead of being a new object that has to confirm again
+            old = self._handover(d, seen)
+            if old is not None:
+                self._alias[d.track_id] = old
+                d = replace(d, track_id=old)
+            if d.track_id not in seen:
+                seen[d.track_id] = d
+        for tid, d in seen.items():
+            self._vote(d)
+            if tid not in self._confirmed:
+                self._streak[tid] = self._streak.get(tid, max(0, prior_hits)) + 1
+        for tid in [t for t in self._streak if t not in seen]:
+            del self._streak[tid]  # a miss before confirmation starts the count again
+        out = []
+        for tid, d in seen.items():
+            cls_id, label, mean = self.voted(tid)
+            if tid not in self._confirmed:
+                if self._streak[tid] < cfg.needed(label, d.conf) or mean < cfg.floor(label, self._search):
+                    continue
+                self._confirmed.add(tid)
+                self._streak.pop(tid, None)
+            # drawn as soon as confirmed; in "seen" only after min_hits detections, so a person the
+            # tracker splits into several brief ids isn't counted several times
+            if tid not in self._counted and self._hits[tid] >= self.min_hits:
+                self._counted.add(tid)
+                self.just_counted.append(tid)
+            cls_id, label = self._stable_label(tid, cls_id, label)
+            shown = Detection(cls_id, label, round(mean, 3), d.xyxy, tid, d.note, d.named_by)
+            self._last[tid] = (shown, now)
+            out.append(shown)
+        for tid, (last, t) in list(self._last.items()):
+            if tid in seen:
+                continue
+            if now - t <= cfg.coast_s:
+                out.append(replace(last, coast=True))
+            else:
+                del self._last[tid]
+        return out
+
+    def _handover(self, d: Detection, seen: dict[int, Detection]) -> int | None:
+        """The coasting track (confirmed, missed this pass, same category) this new detection
+        overlaps most, if the overlap is at least ``handover_iou``."""
+        best, best_iou = None, self.stable.handover_iou
+        if best_iou <= 0:
+            return None
+        for tid, (last, _) in self._last.items():
+            if tid in seen or category(last.cls_id) != category(d.cls_id):
+                continue
+            o = iou(last.xyxy, d.xyxy)
+            if o >= best_iou:
+                best, best_iou = tid, o
+        return best
+
+    def _stable_label(self, tid: int, cls_id: int, label: str) -> tuple[int, str]:
+        """The label a confirmed track keeps: it moves to the vote's winner only when that class's
+        confidence total is ``label_switch`` times the current label's (bus/train folded as voted)."""
+        cur = self._shown.get(tid)
+        if cur is None or cur[1] == label or tid in self._override:
+            self._shown[tid] = (cls_id, label)
+            return self._shown[tid]
+        sums: dict[str, float] = defaultdict(float)
+        for lab, (total, n, c) in self._votes[tid].items():
+            sums[_fold(lab, c, total / n)[1]] += total
+        # ... and only to a class whose own floor it meets (a car never drifts into a weak "truck")
+        n = sum(v[1] for lab, v in self._votes[tid].items() if _fold(lab, v[2], v[0] / v[1])[1] == label)
+        if sums[label] >= self.stable.label_switch * sums[cur[1]] and sums[label] / max(1, n) >= self.stable.floor(label, self._search):
+            self._shown[tid] = (cls_id, label)
+        return self._shown[tid]
+
+    def label_of(self, tid: int) -> str:
+        shown = self._shown.get(tid)
+        return shown[1] if shown else self.voted(tid)[1]
+
+    def forget_live(self) -> None:
+        """New tracker ids (source switched, Search toggled): drop held boxes and part-confirmed tracks."""
+        self._streak.clear()
+        self._last.clear()
+        self._alias.clear()
+        self._car_areas.clear()
+
     def set_override(self, track_id: int, cls_id: int, label: str) -> None:
         self._override[track_id] = (cls_id, label)
 
@@ -109,11 +247,11 @@ class TrackCounter:
     def totals(self) -> dict[str, int]:
         t: dict[str, int] = defaultdict(int)
         for tid in list(self._counted):  # read from the web thread while detect updates
-            t[self.voted(tid)[1]] += 1
+            t[self.label_of(tid)] += 1
         return dict(t)
 
     def reset(self) -> None:
-        self.__init__(self.min_hits)
+        self.__init__(self.min_hits, self.stable)
 
     def snapshot(self) -> dict[str, int]:
         return self.totals
@@ -198,7 +336,7 @@ class Pipeline:
         self.settings = settings
         self.detector = detector
         self.source = source
-        self.counter = TrackCounter()
+        self.counter = TrackCounter(stable=StableConfig.from_settings(settings))  # the ground picture
         self.running = True  # False = Stop pressed: no detection, stream holds the last frame
         self.stats = PipelineStats()
         self.recorder = Recorder(settings.clips_dir, settings.max_clip_seconds)
@@ -251,6 +389,7 @@ class Pipeline:
             self._dets = []
             self._air_dets = []
         self.detector.reset_tracks()
+        self.counter.forget_live()
         if self.search is not None:
             self.search.reset_tracks()
         if self.air is not None:
@@ -315,7 +454,11 @@ class Pipeline:
                 continue  # source switched or Search toggled mid-inference
             if self.air_on:  # the air model owns aircraft and birds; avoid double boxes
                 dets = [d for d in dets if d.cls_id not in AIR_COCO]
-            dets = self.counter.update(dets)  # one voted class per track
+            # one voted class per track; with FPV_STABLE (default) confirmed tracks only, plus brief coasting
+            # detections already behind a track's first report: ByteTrack's activation, plus Search's gate
+            prior = TRACKER_PRIOR_HITS + (max(0, getattr(det, "hits", 1) - 1) if det is self.search else 0)
+            dets = self.counter.update(dets, frame.shape[:2], fts or time.time(), prior_hits=prior,
+                                       search=det is self.search)
             with self._lock:
                 self._dets = dets
                 self._dets_frame_shape = frame.shape[:2]
@@ -404,6 +547,7 @@ class Pipeline:
         on = bool(on) and self.search is not None
         if on != self.search_on:
             (self.search if on else self.detector).reset_tracks()  # start the incoming tracker clean
+            self.counter.forget_live()
             with self._lock:
                 self._dets = []
         self.search_on = on

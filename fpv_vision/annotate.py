@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -78,11 +79,15 @@ def scale_detections(dets: list[Detection], sx: float, sy: float) -> list[Detect
     if sx == 1 and sy == 1:
         return dets
     out = []
-    for d in dets:
+    for d in dets:  # replace() keeps the rest (Air watch name, AI tag, coast)
         x1, y1, x2, y2 = d.xyxy
-        out.append(Detection(d.cls_id, d.label, d.conf,
-                             (int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)), d.track_id))
+        out.append(replace(d, xyxy=(int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy))))
     return out
+
+
+def faded(c: tuple[int, int, int], k: float = 0.45) -> tuple[int, int, int]:
+    """A colour mixed towards the graphite background: a coasting track's box."""
+    return tuple(int(v * k + b * (1 - k)) for v, b in zip(c, TAG_BG))
 
 
 def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
@@ -93,15 +98,17 @@ def draw(frame: np.ndarray, dets: list[Detection], hud: list[str] | None = None,
     fs = 0.4 * max(1.0, w / 1280)  # small labels
     for d in dets:
         c = box_colour(d, alert_tracks)
+        if d.coast:  # not seen this pass: the last box, faded, for a moment (fpv_vision.stable)
+            c = faded(c)
         x1, y1, x2, y2 = d.xyxy
-        cv2.rectangle(img, (x1, y1), (x2, y2), c, thick)
+        cv2.rectangle(img, (x1, y1), (x2, y2), c, max(1, thick - 1) if d.coast else thick)
         tid = d.track_id % 1_000_000 if d.track_id is not None else None  # Air watch ids are offset
         name = label_text(d)
         tag = f"{name}{f' {tid}' if tid is not None else ''} {d.conf:.2f}"
         (tw, th), _ = cv2.getTextSize(tag, FONT, fs, 1)
         ty = max(th + 4, y1)
         _tag(img, x1, ty - th - 5, x1 + tw + 6, ty)
-        cv2.putText(img, tag, (x1 + 3, ty - 3), FONT, fs, TEXT, 1, cv2.LINE_AA)
+        cv2.putText(img, tag, (x1 + 3, ty - 3), FONT, fs, faded(TEXT, 0.6) if d.coast else TEXT, 1, cv2.LINE_AA)
         if d.named_by == "ai":  # small outlined "AI" tag: this name came from the vision model
             (aw, _), _ = cv2.getTextSize("AI", FONT, fs * 0.9, 1)
             ax = x1 + tw + 10

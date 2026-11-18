@@ -51,7 +51,7 @@ def test_scenarios_heartbeat_and_status_carry_the_mode(demo, settings):
 
 def test_clear_removes_our_spot_reports_from_the_map(demo):
     c, svc, tak = demo
-    assert wait_for(lambda: svc.pipeline.source.latest()[1] is not None)
+    assert wait_for(lambda: svc.pipeline.latest_frames()[1] is not None)  # an annotated frame to report
     r = c.post("/api/spot-report", json={"position": "42.0, -93.0", "activity": "2 pax", "send_mesh": False}).json()
     assert r["ok"] and r["cot"]["queued"]
     marker = _queued(tak)[0]

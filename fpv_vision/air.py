@@ -141,7 +141,7 @@ class AirDetector:
         log.info("air watch loaded: %s on %s, %d×%d tiles + full frame", weights.name, device, grid, grid)
 
     def reset_tracks(self) -> None:
-        self._tracker = byte_tracker(self.conf)
+        self._tracker = byte_tracker(self.conf, fast=False)  # Air watch: unchanged
 
     def raw(self, frame: np.ndarray) -> np.ndarray:
         """Merged (untracked) rows [x1, y1, x2, y2, conf, model_cls] in frame coordinates."""

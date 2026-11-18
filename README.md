@@ -45,7 +45,7 @@ is never presented as live.
 10. [Why detections are not geolocated](#why-detections-are-not-geolocated)
 11. [Demo script](#demo-script)
 12. [Raspberry Pi install](#raspberry-pi-install)
-13. [Detection, tracking and counting](#detection-tracking-and-counting)
+13. [Detection, tracking and counting](#detection-tracking-and-counting) (and [stable detections](#stable-detections))
 14. [Configuration reference](#configuration-reference)
 15. [API](#api)
 16. [Development](#development)
@@ -538,7 +538,7 @@ Pi sources:
 - **Adaptive frame-skip:** the detector always takes the newest frame. The overlay is drawn on
   every frame with the latest boxes. If the overlay drops below 85% of its target, the detector
   backs off.
-- **Counting:** "seen" counts unique ByteTrack IDs seen at least 3 times. Each track keeps one
+- **Counting:** "seen" counts unique confirmed tracks (see [Stable detections](#stable-detections)). Each track keeps one
   class for its life, a confidence-weighted vote over all its detections, so a van flickering
   truck/bus/train is one truck. Bus and train are only shown when the voted confidence is at
   least 0.6; otherwise they count as truck. There is no
@@ -549,6 +549,82 @@ Pi sources:
   - OSD overlays;
   - motion blur;
   - COCO classes, which are everyday objects, not military vehicles or camouflage.
+
+## Stable detections
+
+From a drone, YOLO boxes roofs, walls and whole buildings as "truck" and fences as "train", and
+real objects drop out for a frame now and then, so boxes and labels flash on and off.
+`fpv_vision/stable.py` and `TrackCounter` sit between the tracker and the screen, for the
+normal pass and Search alike (Air watch is unchanged):
+
+- **Implausible vehicle boxes are dropped:** more than 25% of the frame
+  (`FPV_VEHICLE_MAX_AREA`), longer than 4 times their width (`FPV_VEHICLE_MAX_ASPECT`: fences,
+  kerbs, walls), or a truck/bus/train more than 10 times the size of the median of the last 300
+  car boxes (`FPV_HEAVY_MAX_CAR_RATIO`; no check until 20 cars have been seen). On our clips
+  buildings called truck were 4–700× a car, most over 10×; real vans 0.4–4×.
+- **Confirmed tracks only, per class:** a truck, bus or train (what roofs, walls and fences are
+  mistaken for) is drawn and counted after 3 consecutive detections (`FPV_CONFIRM_HITS`); every
+  other class after 2 (`FPV_CONFIRM_HITS_OTHER`), and a person, bicycle, motorcycle or car seen at
+  0.6 or more (`FPV_CONFIRM_FAST_CONF`; 0 = off) on its first, so a bike crossing the frame in
+  half a second isn't lost. Search's own 2-pass gate counts towards it. A track is also only
+  shown when its voted mean confidence reaches its class floor:
+  truck, bus and train 0.40 (`FPV_CLASS_CONF`, e.g. `truck=0.55,bus=0.55,train=0.55`), in Search
+  0.55 (`FPV_SEARCH_CLASS_CONF`); other classes the detector's own threshold. Bus and train still
+  fold into truck below 0.6.
+- **Coasting:** a confirmed track that is missed keeps its last box, faded, for 0.5 s
+  (`FPV_COAST_S`). The In view counts include it, so they don't blink either.
+- **Hand-over:** when the tracker loses an object and finds it again under a new id, the new id
+  takes over the held track (box overlap ≥ 0.3, `FPV_HANDOVER_IOU`; 0 = off): it keeps its
+  number and label, and isn't counted again. If the old id comes back too, both are kept.
+- **One label per track:** a confirmed track changes label only when another class's
+  confidence total is 1.5 times its own (`FPV_LABEL_SWITCH`) and meets that class's floor.
+- `FPV_STABLE=0` turns all of it off: the tracker's raw output, as before.
+- **Fast, small objects get a track:** Ultralytics' ByteTrack only reports a new track once it
+  has matched a second detection with IoU × confidence over 0.3, and keeps it only over 0.2. At
+  30 detections a second, a person or bike that moves most of its own size between passes never
+  gets a track (and so is never drawn, however confident), or keeps losing it. The detector now
+  runs its own ByteTrack (as Search already did) that also matches boxes grown 2× about their
+  centres; large or slow objects match as before. `FPV_FAST_TRACK=0` goes back to
+  Ultralytics' `model.track()`. Air watch is unchanged. A track's first report already counts
+  as its second detection.
+
+**Measured** on four DJI clips (1080p60, 3–4 min each), replaying the same recorded tracker
+output (yolo26s on MPS, 30 detections a second, as the HQ Mac runs) through the old and the new
+post-processing. False and true positives were judged by eye on every track's best crop for
+truck/bus/train, and on every track for the Search clips:
+
+| Clip | Box on/off toggles per minute | Label changes per minute | truck/bus/train tracks shown: false / real | Search clips: all tracks false / real |
+|---|---|---|---|---|
+| busy car park | 263 → 1.6 | 5.6 → 0.3 | 47 / 3 → 4 / 1 | |
+| campsite (vans, tents) | 553 → 8.6 | 63 → 13.5 | 16 / 145 → 11 / 125 | |
+| scenery, Search on | 47 → 0 | 1.8 → 0 | | 21 / 14 → 9 / 17 |
+| city scenery, Search on | 93 → 1.1 | 1.9 → 1.1 | | 25 / 28 → 7 / 27 |
+
+Per track, toggles dropped from 150–190 a minute to 0–2.5. Real-vehicle counts are tracks, and
+hand-over merges re-identified duplicates, so a lower "real" number is partly the same van no
+longer counted three times. What it doesn't fix: tents boxed as "car" on the campsite (about
+one car track in five in a sample of 30, before and after), and a 0.55 normal-pass floor would
+cut the campsite's real vans from 125 to 87 for 7 fewer false ones, which is why the default is 0.40.
+
+**Recall** (does the live picture box real objects at all?): 75 real people, cars, vans and one
+parked bike, picked by eye from a full-rate pass (every frame, confidence 0.2) of the car park,
+campsite and city clips, mostly brief and fast. Caught = a drawn box on it at least once while
+it's on screen; coverage = share of its time it is boxed.
+
+| Clip | Caught, before → after | Coverage, before → after |
+|---|---|---|
+| busy car park (31) | 23 → 30 | 0.45 → 0.95 |
+| campsite (30) | 23 → 29 | 0.60 → 0.90 |
+| city scenery, normal pass (14) | 8 → 14 | 0.30 → 0.88 |
+
+Every miss before was an object the tracker never reported (the start-up rule above), not one
+the filters removed. The two still missed are on screen for 0.12 s and 0.05 s with one or two
+frames over 0.30. The faster tracker costs a few more false trucks: 8 of the car park's 47
+(4 with Ultralytics' tracker) and 13 of the campsite's 16 (11), while real van tracks shown stay
+at 151 of 160. None of the clips has a moving bicycle; fast small people stand in for them. Flicker
+with the faster tracker and per-class confirmation is 13 box toggles a minute on the car park and
+28 on the campsite (the toggle table above, measured with 3 detections for every class, has 1.6
+and 8.6; the raw tracker had 263 and 553): more brief, real objects are boxed, and they come and go.
 
 ## Search: small, distant people and vehicles
 
@@ -724,6 +800,12 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_TARGET_FPS` / `FPV_STREAM_WIDTH` / `FPV_JPEG_QUALITY` | 20 / 960 / 75 | (30 / 1280 via run-laptop.sh) |
 | `FPV_AIR` / `FPV_AIR_FPS` | 0 / 10 | Air watch on at start; max Air watch passes per second (`FPV_AIR=1` only; never in the UI: air detection is OP sentry's) |
 | `FPV_SEARCH` / `FPV_SEARCH_CONF` / `FPV_SEARCH_HITS` | 0 / 0.25 / 2 | Search on at start (also the tickbox under the source picker); its confidence threshold; passes in a row before a box is shown |
+| `FPV_STABLE` | 1 | [Stable detections](#stable-detections); 0 = the tracker's raw output |
+| `FPV_FAST_TRACK` | 1 | the detector's own ByteTrack, which keeps fast, small objects; 0 = Ultralytics' `model.track()` |
+| `FPV_CLASS_CONF` / `FPV_SEARCH_CLASS_CONF` | truck, bus, train 0.40 / 0.55 | per-class floors on a track's voted mean confidence, `name=value,...` |
+| `FPV_VEHICLE_MAX_AREA` / `FPV_VEHICLE_MAX_ASPECT` / `FPV_HEAVY_MAX_CAR_RATIO` | 0.25 / 4 / 10 | vehicle boxes bigger than this share of the frame, longer than this many widths, or (truck/bus/train) this many times the recent cars are dropped |
+| `FPV_CONFIRM_HITS` / `FPV_CONFIRM_HITS_OTHER` / `FPV_CONFIRM_FAST_CONF` | 3 / 2 / 0.6 | consecutive detections before a truck, bus or train / anything else is shown and counted; a person, bike, motorcycle or car this confident needs one |
+| `FPV_COAST_S` / `FPV_HANDOVER_IOU` / `FPV_LABEL_SWITCH` | 0.5 / 0.3 / 1.5 | faded hold after a miss; overlap for a new id to take a held track over; vote margin for a label change |
 | `FPV_SEARCH_GRID` / `FPV_SEARCH_AIR_FPS` | auto / 5 | Search tiles: auto = 3×3 at 1440p and up, else 2×2 (or 1, 2, 3); Air watch rate cap while Search is on |
 | `FPV_AIR_NAME_CONF` | 0.7 | Air watch confidence a track needs before the vision model is asked to name it (`VLM_URL` empty = no naming) |
 | `DEMO_MODE` | continuous | `on_demand` (step by step): a clip starts held on its first frame until Start |

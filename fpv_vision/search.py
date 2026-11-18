@@ -44,7 +44,7 @@ class SearchDetector:
 
     def __init__(self, model_path: str, *, device: str = "cpu", imgsz: int = 640, conf: float = 0.25,
                  classes: list[int] | None = None, grid: str | int = "auto", hits: int = 2,
-                 names: dict[int, str] | None = None, model=None):
+                 names: dict[int, str] | None = None, model=None, fast_track: bool = True):
         if model is None:
             from ultralytics import YOLO  # its own instance: the main one carries tracker callbacks
 
@@ -57,18 +57,20 @@ class SearchDetector:
         self.grid = 0  # set from the first frame
         self._lock = threading.Lock()
         self.gate = HitGate(hits)
-        self._tracker = byte_tracker(conf)
+        self.fast_track = fast_track
+        self._tracker = byte_tracker(conf, fast_track)
         log.info("search loaded: %s on %s, conf %.2f, %d-hit gate", Path(model_path).name, device, conf, hits)
 
     @classmethod
     def from_detector(cls, det, settings) -> "SearchDetector":
         """Search with the same weights, classes and device as the main YoloDetector."""
         return cls(det.model_path, device=det.device, imgsz=det.imgsz, conf=settings.search_conf,
-                   classes=det.classes, grid=settings.search_grid, hits=settings.search_hits, names=det.names)
+                   classes=det.classes, grid=settings.search_grid, hits=settings.search_hits, names=det.names,
+                   fast_track=getattr(det, "fast_track", True))
 
     def reset_tracks(self) -> None:
         with self._lock:
-            self._tracker = byte_tracker(self.conf)
+            self._tracker = byte_tracker(self.conf, self.fast_track)
             self.gate.reset()
 
     def raw(self, frame: np.ndarray) -> np.ndarray:
