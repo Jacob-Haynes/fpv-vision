@@ -48,6 +48,7 @@ class Detection:
     track_id: int | None = None
     note: str = ""  # extra detail for the label, e.g. "hexacopter" from the vision model
     named_by: str = ""  # "ai" when the class came from the vision model (fpv_vision.air_namer)
+    coast: bool = False  # not seen this pass: its last box, kept briefly so it doesn't flicker (fpv_vision.stable)
 
     @property
     def category(self) -> str:

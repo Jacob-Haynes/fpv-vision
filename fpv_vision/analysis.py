@@ -55,6 +55,8 @@ class AnalysisJob:
         self.files = expand_playlist(target)
         self.pipeline = pipeline
         self.detector_factory = detector_factory
+        # the live picture's filters and confirmation (fpv_vision.stable), so counts mean the same here
+        self.stable = getattr(getattr(pipeline, "counter", None), "stable", None)
         self.sample_fps = max(0.5, sample_fps)
         self.state = "queued"
         self.error = ""
@@ -104,7 +106,7 @@ class AnalysisJob:
                 self.total_s += n / fps if n > 0 and 1 <= fps <= 240 else 0
                 cap.release()
             detector = self.detector_factory()
-            counter = TrackCounter()
+            counter = TrackCounter(stable=self.stable)
             candidates: list[dict] = []
             offset = 0.0
             for f in self.files:
@@ -143,7 +145,7 @@ class AnalysisJob:
                 break
             t = idx / fps
             dets = detector.detect(frame)
-            dets = counter.update(dets)
+            dets = counter.update(dets, frame.shape[:2], offset + t)
             sec = int(t)
             b = bucket.setdefault(sec, {"t": round(offset + sec, 1), "file": name, "file_t": sec,
                                         "person": 0, "vehicle": 0, "other": 0})
