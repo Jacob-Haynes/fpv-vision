@@ -10,8 +10,11 @@ now and then. ``TrackCounter`` (``fpv_vision.pipeline``) uses this config to:
   seen lately (the median of the last ``CAR_REF_SAMPLES`` car boxes): that is a roof or a whole
   building, not a lorry. On the user's clips buildings called truck were 4-700x a car (most over
   10x), real vans 0.4-4x, and only drone close-ups more;
-* confirm a track only after ``confirm_vehicle`` consecutive detections (``confirm_other`` for
-  people and boats), and only when its voted mean confidence reaches the class floor
+* confirm a track only after consecutive detections, per class: ``confirm_heavy`` (3) for truck,
+  bus and train, the classes buildings and fences are mistaken for; ``confirm_other`` (2) for
+  everything else, and one is enough for a person, bicycle, motorcycle or car seen at
+  ``fast_conf`` (0.6) or more, so a bike crossing the frame in half a second isn't lost; and
+  only when its voted mean confidence reaches the class floor
   (``class_conf``: higher for truck, bus and train than for car or person; Search, which runs
   at a lower confidence over tiles, has its own, higher ``search_class_conf``);
 * draw and count confirmed tracks only;
@@ -33,7 +36,12 @@ from fpv_vision.detector import Detection, category
 
 DEFAULT_CLASS_CONF = {"truck": 0.4, "bus": 0.4, "train": 0.4}  # above the detector's 0.30; see the README
 DEFAULT_SEARCH_CLASS_CONF = {"truck": 0.55, "bus": 0.55, "train": 0.55}  # Search runs at 0.25
-HEAVY = {"truck", "bus", "train"}
+HEAVY = {"truck", "bus", "train"}  # what roofs, walls and fences are mistaken for: the strict rules
+FAST = {"person", "bicycle", "motorcycle", "car"}  # can cross the frame in a few passes
+# ByteTrack only reports a new track once it has matched a second frame (Ultralytics'
+# is_activated), so the first time we see a track id it has already been detected twice:
+# confirmation counts that hit, and a one-frame flash never reaches us at all.
+TRACKER_PRIOR_HITS = 1
 CAR_REF_SAMPLES, CAR_REF_MIN = 300, 20  # car boxes kept for the size reference; fewer = no check
 
 
@@ -55,8 +63,9 @@ class StableConfig:
     search_class_conf: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_SEARCH_CLASS_CONF))
     vehicle_max_area: float = 0.25  # fraction of the frame
     vehicle_max_aspect: float = 4.0  # long side / short side
-    confirm_vehicle: int = 3  # consecutive detections before a vehicle is shown or counted
-    confirm_other: int = 3  # people, boats
+    confirm_heavy: int = 3  # consecutive detections before a truck, bus or train is shown or counted
+    confirm_other: int = 2  # every other class
+    fast_conf: float = 0.6  # one detection at this confidence confirms a FAST class (0 = never)
     coast_s: float = 0.5
     label_switch: float = 1.5
     handover_iou: float = 0.3
@@ -68,16 +77,21 @@ class StableConfig:
             return None
         return cls(class_conf=dict(s.class_conf), search_class_conf=dict(s.search_class_conf),
                    vehicle_max_area=s.vehicle_max_area,
-                   vehicle_max_aspect=s.vehicle_max_aspect, confirm_vehicle=max(1, s.confirm_hits),
-                   confirm_other=max(1, s.confirm_hits_other), coast_s=max(0.0, s.coast_s),
+                   vehicle_max_aspect=s.vehicle_max_aspect, confirm_heavy=max(1, s.confirm_hits),
+                   confirm_other=max(1, s.confirm_hits_other), fast_conf=s.confirm_fast_conf, coast_s=max(0.0, s.coast_s),
                    label_switch=max(1.0, s.label_switch), handover_iou=s.handover_iou,
                    heavy_max_car_ratio=max(0.0, s.heavy_max_car_ratio))
 
     def floor(self, label: str, search: bool = False) -> float:
         return (self.search_class_conf if search else self.class_conf).get(label, 0.0)
 
-    def needed(self, cls_id: int) -> int:
-        return self.confirm_vehicle if category(cls_id) == "vehicle" else self.confirm_other
+    def needed(self, label: str, conf: float) -> int:
+        """Consecutive detections a track of this (voted) class needs; ``conf``: this one's."""
+        if label in HEAVY:
+            return self.confirm_heavy
+        if label in FAST and 0 < self.fast_conf <= conf:
+            return 1
+        return self.confirm_other
 
     def plausible(self, d: Detection, frame_shape: tuple[int, int] | None, car_area: float = 0.0) -> bool:
         """False for a vehicle box no vehicle could fill: most of the frame, a long thin strip, or

@@ -50,7 +50,7 @@ def test_a_truck_many_times_the_size_of_the_cars_around_it_is_a_building():
     assert not cfg.plausible(roof, SHAPE, car_area=1800) and cfg.plausible(van, SHAPE, car_area=1800)
     assert StableConfig(heavy_max_car_ratio=0).plausible(roof, SHAPE, car_area=1800)
 
-    c = counter(confirm_vehicle=1)
+    c = counter(confirm_heavy=1)
     for k in range(25):  # cars build the reference
         c.update([car(100 + k, x=20 * k)], SHAPE, k * 0.04)
     out = c.update([roof, van], SHAPE, 1.0)
@@ -58,14 +58,39 @@ def test_a_truck_many_times_the_size_of_the_cars_around_it_is_a_building():
 
 
 # ------------------------------------------------------------------ confirmation and floors
-def test_vehicles_need_three_consecutive_detections_and_a_miss_starts_again():
+def truck(tid, conf=0.7):
+    return det(TRUCK, "truck", conf, (500, 500, 590, 545), tid)
+
+
+def test_trucks_need_three_consecutive_detections_and_a_miss_starts_again():
     c = counter()
-    assert c.update([car(1)], SHAPE, 0.0) == []
-    assert c.update([car(1)], SHAPE, 0.1) == []
+    assert c.update([truck(1)], SHAPE, 0.0) == []
+    assert c.update([truck(1)], SHAPE, 0.1) == []
     assert c.update([], SHAPE, 0.2) == []  # missed before confirming: back to zero
-    assert c.update([car(1)], SHAPE, 0.3) == [] and c.update([car(1)], SHAPE, 0.4) == []
-    out = c.update([car(1)], SHAPE, 0.5)
-    assert ids(out) == [1] and c.just_counted == [1] and c.totals == {"car": 1}
+    assert c.update([truck(1)], SHAPE, 0.3) == [] and c.update([truck(1)], SHAPE, 0.4) == []
+    out = c.update([truck(1)], SHAPE, 0.5)
+    assert ids(out) == [1] and c.just_counted == [1] and c.totals == {"truck": 1}
+    lorry = det(TRUCK, "truck", 0.95, (1200, 300, 1290, 345), 2)
+    assert ids(c.update([lorry], SHAPE, 0.6)) == [1]  # however confident, 3 for a truck (1 is coasting)
+
+
+def test_people_bikes_and_cars_need_two_or_one_when_confident():
+    bike = lambda tid, conf: det(1, "bicycle", conf, (900, 600, 930, 640), tid)
+    person = lambda tid, conf: det(PERSON, "person", conf, (300, 300, 315, 340), tid)
+    c = counter()
+    # a confident bike, person or car is shown on its first detection: a bike can be gone in 0.5 s
+    assert ids(c.update([bike(1, 0.7), person(2, 0.65), car(3, conf=0.6)], SHAPE, 0.0)) == [1, 2, 3]
+    c = counter()
+    assert c.update([bike(4, 0.45), person(5, 0.5), car(6, conf=0.4)], SHAPE, 0.0) == []
+    assert ids(c.update([bike(4, 0.45), person(5, 0.5), car(6, conf=0.4)], SHAPE, 0.1)) == [4, 5, 6]  # two
+    assert c.totals == {}  # drawn, but "seen" counts a track after 3 detections (ID churn)
+    c.update([bike(4, 0.45), person(5, 0.5), car(6, conf=0.4)], SHAPE, 0.2)
+    assert c.totals == {"bicycle": 1, "person": 1, "car": 1} and sorted(c.just_counted) == [4, 5, 6]
+    boats = counter()
+    boat = det(8, "boat", 0.9, (100, 100, 160, 130), 9)  # not a fast class: two, however confident
+    assert boats.update([boat], SHAPE, 0.0) == [] and ids(boats.update([boat], SHAPE, 0.1)) == [9]
+    off = counter(fast_conf=0)
+    assert off.update([bike(1, 0.9)], SHAPE, 0.0) == []
 
 
 def test_class_floors_hold_back_weak_trucks_but_not_cars():
@@ -93,14 +118,24 @@ def test_a_low_confidence_bus_is_shown_as_a_truck():
     assert [d.label for d in out] == ["truck"]
 
 
+def test_bytetracks_activation_counts_as_the_first_hit():
+    from fpv_vision.stable import TRACKER_PRIOR_HITS
+
+    c = counter()  # a track's first report from ByteTrack is its second detection
+    assert ids(c.update([car(1, conf=0.4)], SHAPE, 0.0, prior_hits=TRACKER_PRIOR_HITS)) == [1]
+    assert 2 not in ids(c.update([truck(2)], SHAPE, 0.05, prior_hits=TRACKER_PRIOR_HITS))  # a truck: one more
+    assert 2 in ids(c.update([truck(2)], SHAPE, 0.1, prior_hits=TRACKER_PRIOR_HITS))
+
+
 def test_search_gate_counts_towards_confirmation():
     c = counter()
-    assert c.update([car(1)], SHAPE, 0.0, prior_hits=1) == []
-    assert ids(c.update([car(1)], SHAPE, 0.1, prior_hits=1)) == [1]  # Search already saw it once
+    assert c.update([truck(1)], SHAPE, 0.0, prior_hits=1) == []
+    assert ids(c.update([truck(1)], SHAPE, 0.1, prior_hits=1)) == [1]  # Search already saw it once
+    assert ids(c.update([car(2, x=900)], SHAPE, 0.2, prior_hits=1))[-1:] == [2]  # a car: at once
 
 
 def test_untracked_boxes_are_never_shown():
-    c = counter(confirm_vehicle=1)
+    c = counter(confirm_other=1)
     assert c.update([det(CAR, "car", 0.9, (1, 1, 50, 30), None)], SHAPE, 0.0) == []
 
 
@@ -139,6 +174,8 @@ def test_a_takeover_that_turns_out_to_be_a_neighbour_keeps_both_boxes():
     assert ids(c.update([car(7, x=130)], SHAPE, 0.4)) == [1]  # took over track 1 ...
     out = c.update([car(1), car(7, x=130)], SHAPE, 0.5)  # ... but car 1 is back: 7 is another car
     assert ids(out) == [1, 7] and not any(d.coast for d in out)
+    for k in range(2):
+        c.update([car(1), car(7, x=130)], SHAPE, 0.6 + k * 0.1)
     assert c.totals == {"car": 2}
 
 
@@ -183,15 +220,16 @@ def test_env(monkeypatch):
 
     s = Settings.from_env()
     cfg = StableConfig.from_settings(s)
-    assert cfg.floor("truck") == 0.4 and cfg.floor("car") == 0.0 and cfg.confirm_vehicle == 3 and cfg.coast_s == 0.5
+    assert cfg.floor("truck") == 0.4 and cfg.floor("car") == 0.0 and cfg.confirm_heavy == 3 and cfg.confirm_other == 2 and cfg.fast_conf == 0.6 and cfg.coast_s == 0.5
     monkeypatch.setenv("FPV_CLASS_CONF", "truck=0.55, train=0.7,junk")
     monkeypatch.setenv("FPV_CONFIRM_HITS", "4")
+    monkeypatch.setenv("FPV_CONFIRM_FAST_CONF", "0.8")
     monkeypatch.setenv("FPV_COAST_S", "0.8")
     monkeypatch.setenv("FPV_VEHICLE_MAX_AREA", "0.15")
     monkeypatch.setenv("FPV_HEAVY_MAX_CAR_RATIO", "0")
     cfg = StableConfig.from_settings(Settings.from_env())
     assert cfg.floor("truck") == 0.55 and cfg.floor("train") == 0.7 and cfg.floor("bus") == 0.4
-    assert cfg.confirm_vehicle == 4 and cfg.coast_s == 0.8 and cfg.vehicle_max_area == 0.15
+    assert cfg.confirm_heavy == 4 and cfg.fast_conf == 0.8 and cfg.coast_s == 0.8 and cfg.vehicle_max_area == 0.15
     assert cfg.heavy_max_car_ratio == 0
     monkeypatch.setenv("FPV_SEARCH_CLASS_CONF", "truck=0.7")
     cfg = StableConfig.from_settings(Settings.from_env())
@@ -248,3 +286,31 @@ def test_fpv_stable_off_shows_the_raw_tracks(settings):
     settings.stable = False
     p = Pipeline(settings, Blinking(), sources.VideoSource("synthetic"))
     assert p.counter.stable is None
+
+
+# ------------------------------------------------------------------ the tracker's start-up
+def test_expanded_iou_lets_a_fast_small_box_overlap_itself():
+    from fpv_vision.tiling import expanded_iou
+
+    a, b = np.array([[100, 100, 130, 150]]), np.array([[120, 120, 150, 170]])  # moved most of its size
+    assert expanded_iou(a, b, scale=1.0)[0, 0] < 0.2 < 0.3 < expanded_iou(a, b)[0, 0]
+    assert expanded_iou(a, np.zeros((0, 4))).shape == (1, 0)
+
+
+def test_a_fast_small_object_gets_a_track_only_with_the_fast_start():
+    pytest.importorskip("ultralytics")
+    from fpv_vision.tiling import byte_tracker, track
+
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+
+    def run(fast):
+        t = byte_tracker(0.3, fast)
+        track(t, np.zeros((0, 6)), frame)  # ByteTrack's first frame activates everything: start after it
+        seen = []
+        for k in range(6):  # a 30 x 50 px person crossing 25 px a pass, at 0.6
+            x = 400 + 25 * k
+            seen.append(len(track(t, np.array([[x, 500, x + 30, 550, 0.6, 0]], float), frame)))
+        return seen
+
+    assert sum(run(False)) == 0  # Ultralytics' own start-up never gives it a track
+    assert run(True)[1:] == [1] * 5  # reported from its second detection on

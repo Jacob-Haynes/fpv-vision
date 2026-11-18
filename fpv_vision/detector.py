@@ -156,7 +156,7 @@ class YoloDetector(Detector):
 
     def __init__(self, model: str, models_dir: Path, *, imgsz: int = 416, conf: float = 0.35,
                  classes: list[int] | None = None, device: str = "cpu", tracker: str = "bytetrack.yaml",
-                 infer_max_width: int = 0):
+                 infer_max_width: int = 0, fast_track: bool = True):
         from ultralytics import YOLO  # heavy import; keep it lazy
 
         self.accelerator = accelerator_of(device)
@@ -170,6 +170,10 @@ class YoloDetector(Detector):
             imgsz = int(size_file.read_text().strip() or imgsz)
         self.imgsz, self.conf, self.classes, self.device, self.tracker = imgsz, conf, classes, device, tracker
         self.infer_max_width = infer_max_width
+        # fast_track: our own ByteTrack (fpv_vision.tiling.byte_tracker), which gives a fast, small
+        # object a track at 30 detections a second; False = Ultralytics' model.track() as before
+        self.fast_track = fast_track
+        self._tracker = None
         self._model = YOLO(path, task="detect")
         self._lock = threading.Lock()
         self.names: dict[int, str] = dict(getattr(self._model, "names", None) or COCO_NAMES)
@@ -186,6 +190,8 @@ class YoloDetector(Detector):
 
             scale = w / self.infer_max_width
             frame = cv2.resize(frame, (self.infer_max_width, int(h / scale)), interpolation=cv2.INTER_AREA)
+        if self.fast_track:
+            return self._detect_fast(frame, scale)
         with self._lock:
             results = self._model.track(
                 frame, persist=True, tracker=self.tracker, imgsz=self.imgsz, conf=self.conf,
@@ -208,15 +214,36 @@ class YoloDetector(Detector):
                                  int(tid) if tid is not None else None))
         return out
 
+    def _detect_fast(self, frame: np.ndarray, scale: float) -> list[Detection]:
+        from fpv_vision.tiling import byte_tracker, track
+
+        with self._lock:
+            r = self._model.predict(frame, imgsz=self.imgsz, conf=self.conf, classes=self.classes,
+                                    device=self.device, verbose=False)[0]
+            b = r.boxes
+            rows = np.zeros((0, 6), np.float32) if b is None or len(b) == 0 else np.hstack(
+                [b.xyxy.cpu().numpy(), b.conf.cpu().numpy()[:, None], b.cls.cpu().numpy()[:, None]])
+            if self._tracker is None:
+                self._tracker = byte_tracker(self.conf)
+            tracked = track(self._tracker, rows, frame)
+        out = []
+        for t in tracked:
+            x1, y1, x2, y2, tid, conf, c = t[:7]
+            c = int(c)
+            out.append(Detection(c, self.names.get(c, str(c)), float(conf),
+                                 (int(x1 * scale), int(y1 * scale), int(x2 * scale), int(y2 * scale)), int(tid)))
+        return out
+
     def reset_tracks(self) -> None:
         with self._lock:
+            self._tracker = None
             pred = getattr(self._model, "predictor", None)
             for t in getattr(pred, "trackers", None) or []:
                 t.reset()
 
     def info(self) -> dict:
         return {"name": "yolo", "backend": self.backend, "model": self.model_path, "imgsz": self.imgsz,
-                "conf": self.conf, "tracker": "ByteTrack", "device": self.device, "accelerator": self.accelerator}
+                "conf": self.conf, "tracker": "ByteTrack" + (" (fast start)" if self.fast_track else ""), "device": self.device, "accelerator": self.accelerator}
 
 
 def build_detector(settings) -> Detector:
@@ -227,7 +254,8 @@ def build_detector(settings) -> Detector:
         device = select_device(settings.device)
         model, imgsz = choose_model(settings, device)
         return YoloDetector(model, settings.models_dir, imgsz=imgsz, conf=settings.conf, classes=classes,
-                            device=device, infer_max_width=settings.infer_max_width)
+                            device=device, infer_max_width=settings.infer_max_width,
+                            fast_track=getattr(settings, "fast_track", True))
     except Exception as e:  # noqa: BLE001 - offline with no weights must still stream
         log.error("detector unavailable, streaming without detection: %s", e)
         return NullDetector(f"model unavailable: {e}")

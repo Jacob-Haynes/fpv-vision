@@ -86,12 +86,14 @@ class Settings:
     search_air_fps: float = 5.0  # Air watch rate cap while Search is on (they share the GPU)
     # stable detections (fpv_vision.stable): false-vehicle filters and flicker-free boxes
     stable: bool = True  # FPV_STABLE=0: the tracker's raw output, as before
+    fast_track: bool = True  # FPV_FAST_TRACK=0: Ultralytics' own ByteTrack start-up (misses fast small objects)
     class_conf: dict = field(default_factory=lambda: dict(DEFAULT_CLASS_CONF))  # FPV_CLASS_CONF=truck=0.4,bus=0.4
     search_class_conf: dict = field(default_factory=lambda: dict(DEFAULT_SEARCH_CLASS_CONF))  # FPV_SEARCH_CLASS_CONF
     vehicle_max_area: float = 0.25  # a vehicle box bigger than this share of the frame is a building
     vehicle_max_aspect: float = 4.0  # ... or longer than this many times its width, a fence or wall
-    confirm_hits: int = 3  # consecutive detections before a vehicle is shown or counted
-    confirm_hits_other: int = 3  # people and boats
+    confirm_hits: int = 3  # consecutive detections before a truck, bus or train is shown or counted
+    confirm_hits_other: int = 2  # every other class (people, bikes, cars, boats)
+    confirm_fast_conf: float = 0.6  # a person, bike, motorcycle or car this confident is shown at once (0 = off)
     coast_s: float = 0.5  # a confirmed box stays, faded, this long after its last detection
     label_switch: float = 1.5  # a track's label changes only when another class's vote is this many times bigger
     handover_iou: float = 0.3  # a new tracker id this far over a held box takes that track over (0 = never)
@@ -192,12 +194,14 @@ class Settings:
         s.search_hits = _env_int("FPV_SEARCH_HITS", s.search_hits)
         s.search_air_fps = _env_float("FPV_SEARCH_AIR_FPS", s.search_air_fps)
         s.stable = _env_bool("FPV_STABLE", s.stable)
+        s.fast_track = _env_bool("FPV_FAST_TRACK", s.fast_track)
         s.class_conf = parse_class_conf(_env("FPV_CLASS_CONF"), s.class_conf)
         s.search_class_conf = parse_class_conf(_env("FPV_SEARCH_CLASS_CONF"), s.search_class_conf)
         s.vehicle_max_area = _env_float("FPV_VEHICLE_MAX_AREA", s.vehicle_max_area)
         s.vehicle_max_aspect = _env_float("FPV_VEHICLE_MAX_ASPECT", s.vehicle_max_aspect)
         s.confirm_hits = _env_int("FPV_CONFIRM_HITS", s.confirm_hits)
         s.confirm_hits_other = _env_int("FPV_CONFIRM_HITS_OTHER", s.confirm_hits_other)
+        s.confirm_fast_conf = _env_float("FPV_CONFIRM_FAST_CONF", s.confirm_fast_conf)
         s.coast_s = _env_float("FPV_COAST_S", s.coast_s)
         s.label_switch = _env_float("FPV_LABEL_SWITCH", s.label_switch)
         s.handover_iou = _env_float("FPV_HANDOVER_IOU", s.handover_iou)

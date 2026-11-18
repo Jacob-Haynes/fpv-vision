@@ -111,15 +111,49 @@ def predict_tiles(model, frame: np.ndarray, grid: int, *, imgsz: int, conf: floa
     return merge(np.concatenate(rows), groups=groups) if rows else np.zeros((0, 6))
 
 
-def byte_tracker(conf: float):
-    """A fresh Ultralytics BYTETracker whose high/new-track thresholds follow ``conf``."""
+FAST_SCALE = 2.0  # boxes are also compared grown this many times about their centres
+
+
+def expanded_iou(a: np.ndarray, b: np.ndarray, scale: float = FAST_SCALE) -> np.ndarray:
+    """IoU matrix of two (n, 4) / (m, 4) xyxy arrays after growing every box ``scale`` times about
+    its centre: a small object that moved most of its own size between passes still overlaps itself."""
+    def grow(x):
+        c = (x[:, :2] + x[:, 2:]) / 2
+        h = (x[:, 2:] - x[:, :2]) * scale / 2
+        return np.hstack([c - h, c + h])
+
+    a, b = grow(np.asarray(a, float).reshape(-1, 4)), grow(np.asarray(b, float).reshape(-1, 4))
+    lt = np.maximum(a[:, None, :2], b[None, :, :2])
+    rb = np.minimum(a[:, None, 2:], b[None, :, 2:])
+    inter = np.prod(np.clip(rb - lt, 0, None), axis=2)
+    area = lambda x: np.prod(x[:, 2:] - x[:, :2], axis=1)
+    union = area(a)[:, None] + area(b)[None, :] - inter
+    return np.where(union > 0, inter / np.maximum(union, 1e-9), 0.0)
+
+
+def byte_tracker(conf: float, fast: bool = True):
+    """A fresh Ultralytics BYTETracker whose high/new-track thresholds follow ``conf``.
+
+    ``fast``: a track and a detection also match on their boxes grown ``FAST_SCALE`` times (the
+    better of that and Ultralytics' IoU x confidence). Ultralytics alone needs IoU x confidence
+    over 0.3 to give a new track its second detection, and over 0.2 to keep it, so at 30
+    detections a second a small person or bike that moves most of its own size between passes
+    never gets a track, or keeps losing it, however confident. Big or slow objects match as before."""
     from ultralytics.trackers.byte_tracker import BYTETracker
     from ultralytics.utils import YAML, IterableSimpleNamespace
     from ultralytics.utils.checks import check_yaml
 
+    class FastTracker(BYTETracker):
+        def get_dists(self, tracks, detections):
+            dists = super().get_dists(tracks, detections)
+            if not len(tracks) or not len(detections):
+                return dists
+            grown = expanded_iou(np.array([t.xyxy for t in tracks]), np.array([d.xyxy for d in detections]))
+            return np.minimum(dists, 1 - grown)
+
     cfg = YAML.load(check_yaml("bytetrack.yaml"))
     cfg.update(track_high_thresh=conf, track_low_thresh=0.1, new_track_thresh=conf)
-    return BYTETracker(IterableSimpleNamespace(**cfg))
+    return (FastTracker if fast else BYTETracker)(IterableSimpleNamespace(**cfg))
 
 
 def track(tracker, rows: np.ndarray, frame: np.ndarray) -> np.ndarray:

@@ -28,7 +28,7 @@ import numpy as np
 from fpv_vision import annotate, summary
 from fpv_vision.detector import Detection, Detector, category
 from fpv_vision.sources import VideoSource
-from fpv_vision.stable import CAR_REF_MIN, CAR_REF_SAMPLES, StableConfig, iou
+from fpv_vision.stable import CAR_REF_MIN, CAR_REF_SAMPLES, TRACKER_PRIOR_HITS, StableConfig, iou
 
 log = logging.getLogger(__name__)
 AIR_COCO = {4, 14, 33}  # COCO airplane, bird, kite: replaced by Air watch classes when it is on
@@ -67,7 +67,8 @@ class TrackCounter:
         self.stable = stable
         self._hits: dict[int, int] = defaultdict(int)
         self._votes: dict[int, dict[str, list]] = {}  # track -> label -> [conf sum, n, cls_id]
-        self._counted: set[int] = set()
+        self._counted: set[int] = set()  # in the "seen" totals
+        self._confirmed: set[int] = set()  # stable: drawn (counted too once seen min_hits times)
         self._override: dict[int, tuple[int, str]] = {}  # track -> (cls_id, label) set by the vision model
         self.just_counted: list[int] = []  # tracks that reached min_hits in the last update()
         self.untracked_peak: dict[str, int] = defaultdict(int)
@@ -143,7 +144,7 @@ class TrackCounter:
             if d.track_id is None or not cfg.plausible(d, frame_shape, car_area):
                 continue
             tid = self._alias.get(d.track_id, d.track_id)
-            (held[tid] if tid in self._counted else fresh).append(d)
+            (held[tid] if tid in self._confirmed else fresh).append(d)
         for tid, ds in held.items():
             # the track's own id first; an id that took it over while it was missed, and now
             # turns out to be a different object beside it, becomes its own track (already shown,
@@ -154,8 +155,7 @@ class TrackCounter:
                 if d.track_id in seen:
                     continue
                 self._alias.pop(d.track_id, None)
-                self._counted.add(d.track_id)
-                self.just_counted.append(d.track_id)
+                self._confirmed.add(d.track_id)
                 self._shown[d.track_id] = self._shown.get(tid, (d.cls_id, d.label))
                 seen[d.track_id] = d
         for d in fresh:
@@ -169,19 +169,23 @@ class TrackCounter:
                 seen[d.track_id] = d
         for tid, d in seen.items():
             self._vote(d)
-            if tid not in self._counted:
+            if tid not in self._confirmed:
                 self._streak[tid] = self._streak.get(tid, max(0, prior_hits)) + 1
         for tid in [t for t in self._streak if t not in seen]:
             del self._streak[tid]  # a miss before confirmation starts the count again
         out = []
         for tid, d in seen.items():
             cls_id, label, mean = self.voted(tid)
-            if tid not in self._counted:
-                if self._streak[tid] < cfg.needed(cls_id) or mean < cfg.floor(label, self._search):
+            if tid not in self._confirmed:
+                if self._streak[tid] < cfg.needed(label, d.conf) or mean < cfg.floor(label, self._search):
                     continue
+                self._confirmed.add(tid)
+                self._streak.pop(tid, None)
+            # drawn as soon as confirmed; in "seen" only after min_hits detections, so a person the
+            # tracker splits into several brief ids isn't counted several times
+            if tid not in self._counted and self._hits[tid] >= self.min_hits:
                 self._counted.add(tid)
                 self.just_counted.append(tid)
-                self._streak.pop(tid, None)
             cls_id, label = self._stable_label(tid, cls_id, label)
             shown = Detection(cls_id, label, round(mean, 3), d.xyxy, tid, d.note, d.named_by)
             self._last[tid] = (shown, now)
@@ -451,7 +455,8 @@ class Pipeline:
             if self.air_on:  # the air model owns aircraft and birds; avoid double boxes
                 dets = [d for d in dets if d.cls_id not in AIR_COCO]
             # one voted class per track; with FPV_STABLE (default) confirmed tracks only, plus brief coasting
-            prior = max(0, getattr(det, "hits", 1) - 1) if det is self.search else 0  # Search's own gate
+            # detections already behind a track's first report: ByteTrack's activation, plus Search's gate
+            prior = TRACKER_PRIOR_HITS + (max(0, getattr(det, "hits", 1) - 1) if det is self.search else 0)
             dets = self.counter.update(dets, frame.shape[:2], fts or time.time(), prior_hits=prior,
                                        search=det is self.search)
             with self._lock:

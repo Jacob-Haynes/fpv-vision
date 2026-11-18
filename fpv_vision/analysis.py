@@ -23,6 +23,7 @@ import cv2
 
 from fpv_vision import annotate, summary
 from fpv_vision.pipeline import TrackCounter
+from fpv_vision.stable import TRACKER_PRIOR_HITS
 from fpv_vision.sources import expand_playlist
 
 log = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ class AnalysisJob:
                 break
             t = idx / fps
             dets = detector.detect(frame)
-            dets = counter.update(dets, frame.shape[:2], offset + t)
+            dets = counter.update(dets, frame.shape[:2], offset + t, prior_hits=TRACKER_PRIOR_HITS)
             sec = int(t)
             b = bucket.setdefault(sec, {"t": round(offset + sec, 1), "file": name, "file_t": sec,
                                         "person": 0, "vehicle": 0, "other": 0})

@@ -141,7 +141,8 @@ def app_client(settings):
     service = Service(settings, pipeline, SceneDescriber("auto", None, gemini), tak, mesh,
                       detector_factory=FakeDetector).start()
     client = TestClient(create_app(service))
-    assert wait_for(lambda: pipeline.latest_jpeg()[1] and pipeline.current_detections()[0])
+    # all four confirmed: the people and the car on their first pass, the truck on its third
+    assert wait_for(lambda: pipeline.latest_jpeg()[1] and len(pipeline.current_detections()[0]) == 4)
     yield client, service
     service.stop()
     pipeline.stop()
@@ -235,10 +236,10 @@ def test_null_detector_pipeline_streams(settings):
         p.stop()
 
 
-# sha256 of ui-kit v3 (pi-profiles 1ee86d2) (isr-ui.css, isr-ui.js, fonts/): the served copies must be the kit files, unchanged
+# sha256 of ui-kit v4 (pi-profiles d47a5ba) (isr-ui.css, isr-ui.js, fonts/): the served copies must be the kit files, unchanged
 ISR_UI_SHA256 = {
-    "isr-ui.css": "287c3df0938d25c25b04b751007095c3cf08e1df0e2689d3dd8df8b3e9eb832c",
-    "isr-ui.js": "79a61cb2a427302e45b62cbebe2d022eff2dcd0549df5edea77b13a6b478fe7d",
+    "isr-ui.css": "59982e401316f8ef3032df561974c542119bbbf606998af97f92fff656ddab1e",
+    "isr-ui.js": "109cef714b1f4dfba0159c0f5cab04e4cd2338eea61e41705063e43f4e9ea296",
     "fonts/barlow-condensed-500.woff2": "31ff5e6e96a096fde4d78bc838719e69b093db2d0b062b96e423c065a6d1b2b1",
     "fonts/barlow-condensed-600.woff2": "5bc49d41f32810a114765314392332ce2acae2276635eee265a50319a12c1b49",
     "fonts/ibm-plex-mono-400.woff2": "52de70091213c9eab340e2a7ac59e7b6b2b94e089bf69ef38479b22cfde4274c",
@@ -253,10 +254,10 @@ def test_page_uses_shared_isr_ui_kit(app_client):
 
     client, _ = app_client
     html = client.get("/").text
-    assert '<link rel="stylesheet" href="/isr-ui.css?v=3">' in html and '<script src="/isr-ui.js?v=3"></script>' in html
+    assert '<link rel="stylesheet" href="/isr-ui.css?v=4">' in html and '<script src="/isr-ui.js?v=4"></script>' in html
     for name, sha in ISR_UI_SHA256.items():
         r = client.get("/" + name)
         assert r.status_code == 200 and hashlib.sha256(r.content).hexdigest() == sha, name
-    assert "text/css" in client.get("/isr-ui.css?v=3").headers["content-type"]
+    assert "text/css" in client.get("/isr-ui.css?v=4").headers["content-type"]
     assert client.get("/fonts/ibm-plex-mono-400.woff2").headers["content-type"] == "font/woff2"
     assert client.get("/fonts/..%2F..%2Fapp.py").status_code == 404
