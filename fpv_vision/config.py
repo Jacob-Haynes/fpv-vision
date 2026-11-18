@@ -76,7 +76,7 @@ class Settings:
     jpeg_quality: int = 75
     air: bool = False  # Air watch (FPV_AIR=1 only, never in the UI): air detection belongs to OP sentry
     air_fps: float = 10.0  # max Air watch passes per second (each pass = full frame + 2x2 tiles)
-    air_name_conf: float = 0.7  # YOLOE confidence a track needs before the vision model is asked to name it
+    air_name_conf: float = 0.7  # Air watch confidence a track needs before the vision model is asked to name it
     search: bool = False  # Search: ground detector on tiles for small, distant people/vehicles (FPV_SEARCH)
     search_conf: float = 0.25
     search_grid: str = "auto"  # auto = 3x3 for 1440p and up, else 2x2; or 1/2/3

@@ -1,15 +1,19 @@
 """Air watch: open-vocabulary detection of drones, helicopters, aeroplanes and birds.
 
 COCO has "airplane" but no drone or helicopter, and small drones come out as "bird" or "kite".
-Air watch runs an open-vocabulary Ultralytics YOLOE model, prompted with text, beside the normal
+Air watch runs an open-vocabulary Ultralytics YOLO-World v2 model, prompted with text, beside the normal
 detector. Small targets: each frame is cut into 2×2 overlapping tiles plus the full frame (as in
 SAHI), the tiles are run as one batch, boxes are mapped back and merged with NMS, and then tracked
 with ByteTrack. Each track gets one class by confidence-weighted vote (``TrackCounter``).
 
-Offline: YOLOE needs a text encoder (MobileCLIP, ~250 MB) only to turn the prompts into
-embeddings. ``prefetch()`` (run by ``--setup-only``) downloads the weights, computes the
-embeddings once and caches them in the models dir; at run time only the weights and that
-small cache file are loaded, with no network and no text encoder.
+Licence: YOLO-World v2 turns the prompts into embeddings with OpenAI's CLIP ViT-B/32 (MIT). It never
+uses YOLOE, whose text encoder (Apple MobileCLIP, ``mobileclip*.ts``) is under a research-only licence
+that this kit must not use; YOLOE model names are refused.
+
+Offline: CLIP (~340 MB, in ``~/.cache/clip``) is needed only to turn the prompts into embeddings.
+``prefetch()`` (``--setup-only`` with ``FPV_AIR=1``) downloads the weights, sets the prompts once and
+saves a model with them baked in, in the models dir; at run time only that file is loaded, with no
+network and no text encoder.
 """
 
 from __future__ import annotations
@@ -27,7 +31,10 @@ from fpv_vision.tiling import byte_tracker, drop_cut, merge, predict_tiles, tile
 
 log = logging.getLogger(__name__)
 
-AIR_MODEL = "yoloe-26s-seg.pt"
+AIR_MODEL = "yolov8s-worldv2.pt"  # YOLO-World v2 (Ultralytics, AGPL-3.0) + OpenAI CLIP text encoder (MIT)
+LICENCE_NOTE = ("Air watch (FPV_AIR=1) downloads YOLO-World v2 weights (Ultralytics, AGPL-3.0) and, once, "
+                "OpenAI CLIP ViT-B/32 (MIT, ~340 MB) for its text prompts. It never uses YOLOE or Apple "
+                "MobileCLIP (research-only licence). Air detection is OP sentry's job.")
 PROMPTS = ["drone", "quadcopter", "helicopter", "aeroplane", "bird"]
 
 # class ids >= AIR_BASE never collide with COCO (0-79); detector.category() calls them "air"
@@ -69,41 +76,45 @@ def cot_type(label: str, hostile: bool = False) -> str | None:
 
 
 # ---------------------------------------------------------------- model files
-def _pe_path(models_dir: Path, model: str, prompts: list[str]) -> Path:
+def _check_licence(model: str) -> None:
+    if "yoloe" in Path(model).name.lower() or "mobileclip" in Path(model).name.lower():
+        raise ValueError(f"{model}: YOLOE needs Apple MobileCLIP (research-only licence), which this kit must "
+                         "not use; Air watch uses YOLO-World v2 (OpenAI CLIP, MIT)")
+
+
+def _baked_path(models_dir: Path, model: str, prompts: list[str]) -> Path:
     key = hashlib.sha1(("|".join(prompts) + "@" + model).encode()).hexdigest()[:10]
-    return Path(models_dir) / f"{Path(model).stem}.prompts-{key}.pt"
+    return Path(models_dir) / f"{Path(model).stem}.air-{key}.pt"
 
 
 def prefetch(models_dir: Path, model: str = AIR_MODEL, prompts: list[str] | None = None) -> Path:
-    """Download the YOLOE weights and cache the prompt embeddings (needs internet once)."""
-    import torch
-    from ultralytics import YOLOE
+    """Download YOLO-World v2 and save it with the prompts baked in (needs internet once)."""
+    _check_licence(model)
+    from ultralytics import YOLOWorld
 
     from fpv_vision.detector import ensure_weights
 
     prompts = prompts or PROMPTS
     models_dir = Path(models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
+    baked = _baked_path(models_dir, model, prompts)
+    if baked.exists():
+        return baked
     weights = ensure_weights(str(models_dir / model))
-    pe_file = _pe_path(models_dir, model, prompts)
-    if pe_file.exists():
-        return pe_file
     cwd = os.getcwd()
-    os.chdir(models_dir)  # the text encoder downloads into the working directory
+    os.chdir(models_dir)  # Ultralytics downloads into the working directory
     try:
-        m = YOLOE(weights)
-        pe = m.get_text_pe(prompts)
+        m = YOLOWorld(weights)
+        m.set_classes(prompts)  # OpenAI CLIP ViT-B/32
+        m.save(str(baked))
     finally:
         os.chdir(cwd)
-    torch.save(pe.cpu(), pe_file)
-    log.info("air watch prompts cached: %s", pe_file)
-    for enc in models_dir.glob("mobileclip*.ts"):  # ~250 MB, only needed to change the prompts
-        enc.unlink(missing_ok=True)
-    return pe_file
+    log.info("air watch prompts baked in: %s", baked)
+    return baked
 
 
 def available(models_dir: Path, model: str = AIR_MODEL, prompts: list[str] | None = None) -> bool:
-    return (Path(models_dir) / model).exists() and _pe_path(models_dir, model, prompts or PROMPTS).exists()
+    return _baked_path(models_dir, model, prompts or PROMPTS).exists()
 
 
 # ---------------------------------------------------------------- detector
@@ -112,18 +123,17 @@ class AirDetector:
 
     def __init__(self, models_dir: Path, device: str = "cpu", *, model: str = AIR_MODEL, imgsz: int = 640,
                  conf: float = 0.2, grid: int = 2, prompts: list[str] | None = None):
-        import torch
-        from ultralytics import YOLOE
+        _check_licence(model)
+        from ultralytics import YOLOWorld
 
         self.prompts = prompts or PROMPTS
-        weights = Path(models_dir) / model
-        pe_file = _pe_path(models_dir, model, self.prompts)
-        if not weights.exists() or not pe_file.exists():
-            raise FileNotFoundError("air watch model not downloaded: run scripts/run-laptop.sh --setup-only "
-                                    "(or python -m fpv_vision --prefetch) while online")
+        weights = _baked_path(models_dir, model, self.prompts)
+        if not weights.exists():
+            raise FileNotFoundError("air watch model not downloaded: run FPV_AIR=1 scripts/run-laptop.sh "
+                                    "--setup-only (or FPV_AIR=1 python -m fpv_vision --prefetch) while online")
+        log.warning(LICENCE_NOTE)
         self.model_path, self.device, self.imgsz, self.conf, self.grid = str(weights), device, imgsz, conf, grid
-        self._model = YOLOE(str(weights))
-        self._model.set_classes(self.prompts, torch.load(pe_file, map_location="cpu"))
+        self._model = YOLOWorld(str(weights))  # prompts baked in: no text encoder, no network
         self._names = {i: p for i, p in enumerate(self.prompts)}
         self._lock = threading.Lock()
         self._tracker = None

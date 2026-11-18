@@ -65,7 +65,7 @@ scripts/run-laptop.sh                      # http://isr-droneops.local:8110
 `--setup-only` downloads the YOLO26s weights (19 MB) and both sample clips (about 9 MB each) into
 `~/Library/Application Support/isr-kit/fpv-vision`, and exits non-zero if anything is still
 missing. After that **no internet is needed**, so run it before demo day while online.
-It skips the Air watch model (YOLOE, about 300 MB with its text encoder) unless `FPV_AIR=1`.
+It skips the Air watch model (YOLO-World v2 and its CLIP text encoder, about 370 MB) unless `FPV_AIR=1`.
 
 - Downloads retry with backoff (honouring `Retry-After` on HTTP 429) and send a descriptive
   User-Agent, as Wikimedia asks. The street clip falls back to a 360p transcode and the original
@@ -598,7 +598,7 @@ a person or vehicle.
   may be parked rolling stock, so they are counted neither right nor wrong.
 - **Rate:** detection passes per second (higher is smoother):
 
-  | Mac | Clip | Normal | Search | Search + Air watch, `FPV_AIR=1` only (Air watch) |
+  | Mac | Clip | Normal | Search | Search + Air watch, `FPV_AIR=1` only (Air watch; measured with YOLOE, before the licence switch) |
   |---|---|---|---|---|
   | HQ M4 Max, nothing else on the GPU | 0018 | 54 | 43 | 36 (4.9) |
   | HQ M4 Max | 0002 | 46 | 36 | 30 (4.9) |
@@ -613,14 +613,22 @@ FPV vision is a drone looking at the ground, so it doesn't look for aircraft. Dr
 aeroplanes and birds are OP sentry's job, the static defensive camera, and the air clips
 (`~/Desktop/ISR-demo/air-clips`) belong to it. The code below is kept but never offered in the
 UI: no tickbox, no air tracks in In view, no Mark hostile. It only runs with `FPV_AIR=1`, and
-YOLOE and its text encoder are only downloaded or loaded then (`--setup-only` skips them
-otherwise). Without `FPV_AIR=1`, `POST /api/air` and `/api/air/mark` return 409.
+its model and text encoder are only downloaded or loaded then (`--setup-only` skips them
+otherwise), with a licence warning. Without `FPV_AIR=1`, `POST /api/air` and `/api/air/mark`
+return 409.
+
+**Licence: no YOLOE, no MobileCLIP.** Ultralytics YOLOE turns text prompts into embeddings with
+Apple's MobileCLIP (`mobileclip2_b.ts`), which is under a research-only licence, so the kit must
+not use it. Air watch now uses YOLO-World v2 (`yolov8s-worldv2.pt`), whose text encoder is
+OpenAI CLIP ViT-B/32 (MIT). The code refuses YOLOE and MobileCLIP model names. Earlier versions
+left `yoloe-26s-seg.pt` and `yoloe-26s-seg.prompts-<hash>.pt` (embeddings made by MobileCLIP)
+in the models dir: delete them.
 
 
 COCO has "airplane" but no drone or helicopter, and small drones come out as "bird" or "kite",
 which the normal detector filters out. **Air watch** (`FPV_AIR=1`) runs a second, open-vocabulary model beside the normal detector, on its own thread:
 
-- **Model and prompts:** YOLOE (`yoloe-26s-seg.pt`, Ultralytics 8.4) prompted with "drone",
+- **Model and prompts:** YOLO-World v2 (`yolov8s-worldv2.pt`, Ultralytics 8.4) prompted with "drone",
   "quadcopter", "helicopter", "aeroplane", "bird". Quadcopter maps to drone. Bird stays visible,
   because telling bird from drone is part of the demo.
 - **Tiling:** each pass runs the full frame plus 2×2 overlapping tiles (as in SAHI) in one batch.
@@ -636,22 +644,23 @@ which the normal detector filters out. **Air watch** (`FPV_AIR=1`) runs a second
   - placed at the **observer's** position (`SENSOR_LAT`/`SENSOR_LON`), because there is no range
     or bearing; with no position, no CoT is sent.
   - Drones also send a mesh alert, within the 30 s mesh limit. Birds are shown only.
-- **Offline:** YOLOE needs a 250 MB text encoder only to turn the prompts into embeddings.
-  With `FPV_AIR=1`, `--setup-only` downloads the weights, caches the embeddings (11 KB) and deletes the encoder.
-  At run time it needs no network, and it runs on MPS.
+- **Offline:** OpenAI CLIP ViT-B/32 (about 340 MB, in Ultralytics' weights dir under `clip/`) is
+  needed only to turn the prompts into embeddings. With `FPV_AIR=1`, `--setup-only` downloads the
+  weights and saves `yolov8s-worldv2.air-<hash>.pt` with the prompts baked in. At run time only
+  that file is loaded: no network and no text encoder. It runs on MPS.
 
-**Naming by the vision model.** YOLOE finds and tracks air objects; the local VLM names them.
+**Naming by the vision model.** The Air watch model finds and tracks air objects; the local VLM names them.
 `VLM_URL` / `VLM_MODEL` set the model: qwen3-vl:8b-instruct on Ollama, the same one that
 describes scenes. On the drone-ops Mac, which runs its own Ollama, use
 `VLM_URL=http://localhost:11434`.
 
-- **When:** a non-bird track with YOLOE confidence ≥ 0.7 that has been stable for 0.5 s.
+- **When:** a non-bird track with Air watch confidence ≥ 0.7 that has been stable for 0.5 s.
 - **What is sent:** its box with 30 % padding, at least 224 px on the short side, through
   `/v1/chat/completions` with reasoning off. The prompt asks for JSON:
   `{"class": "drone|helicopter|aeroplane|bird|other", "confidence": 0-1, "detail": "≤6 words"}`.
   JSON-schema structured output is used when the server accepts it (Ollama 0.40 with this model
   does); otherwise the reply is parsed leniently.
-- **The answer replaces the YOLOE vote:**
+- **The answer replaces the model's vote:**
   - the label reads "Drone · hexacopter" (the video overlay uses "Drone - hexacopter") with a
     small **AI** tag;
   - confidence under 0.5, or "other", gives **Air contact** (APP-6 unknown, CoT `a-u-A`).
@@ -659,12 +668,12 @@ describes scenes. On the drone-ops Mac, which runs its own Ollama, use
   with a larger crop.
 - **Limits:** one call in flight, a queue of 3 (newest first), a 10 s timeout. The video and
   detection loops never wait for it.
-- **VLM unreachable:** the YOLOE vote stays, and the pill's optional **AI naming** check shows
+- **VLM unreachable:** the model's vote stays, and the pill's optional **AI naming** check shows
   "unreachable".
 - **Renamed tracks:** a track first sent as a helicopter or aeroplane and later named a drone sends
   a CoT update (same uid, new type) and a mesh alert.
 
-**Measured on the HQ M4 Max** on the three air clips in `~/Desktop/ISR-demo/air-clips`
+**Measured with YOLOE, before the licence switch** (not re-measured with YOLO-World v2), on the HQ M4 Max, on the three air clips in `~/Desktop/ISR-demo/air-clips`
 (licences in `CREDITS.txt` there).
 
 - **Method:** played in real time at 10 passes per second, as the app does. AI naming used
@@ -716,7 +725,7 @@ shell on a Mac). Matching CLI flags override it: `--simulate`, `--replay PATH…
 | `FPV_AIR` / `FPV_AIR_FPS` | 0 / 10 | Air watch on at start; max Air watch passes per second (`FPV_AIR=1` only; never in the UI: air detection is OP sentry's) |
 | `FPV_SEARCH` / `FPV_SEARCH_CONF` / `FPV_SEARCH_HITS` | 0 / 0.25 / 2 | Search on at start (also the tickbox under the source picker); its confidence threshold; passes in a row before a box is shown |
 | `FPV_SEARCH_GRID` / `FPV_SEARCH_AIR_FPS` | auto / 5 | Search tiles: auto = 3×3 at 1440p and up, else 2×2 (or 1, 2, 3); Air watch rate cap while Search is on |
-| `FPV_AIR_NAME_CONF` | 0.7 | YOLOE confidence a track needs before the vision model is asked to name it (`VLM_URL` empty = no naming) |
+| `FPV_AIR_NAME_CONF` | 0.7 | Air watch confidence a track needs before the vision model is asked to name it (`VLM_URL` empty = no naming) |
 | `DEMO_MODE` | continuous | `on_demand` (step by step): a clip starts held on its first frame until Start |
 | `FPV_HUD` | 0 | debug text (model, fps, time) burned into the video; also a toggle under Details. The SIM/REC/LIVE badge is always drawn |
 | `FPV_ALLOW_SCREEN` / `FPV_REQUEST_CAMERA` | 1 on macOS / 1 | screen source; macOS camera prompt |
@@ -780,6 +789,10 @@ Code layout (`fpv_vision/`):
 ## License
 
 Copyright (C) 2026 Jacob Haynes. Licensed under the GNU AGPL v3 (see LICENSE). Uses Ultralytics YOLO (AGPL-3.0); model weights are subject to Ultralytics' licence.
+
+Air watch (`FPV_AIR=1` only) also uses YOLO-World v2 weights (Ultralytics, AGPL-3.0) and OpenAI
+CLIP ViT-B/32 (MIT) for its text prompts. It does not use YOLOE or Apple MobileCLIP: MobileCLIP's
+licence allows only non-commercial research, so the kit must not use it.
 
 The AGPL means that if you modify fpv-vision and let other people use it over a network
 (for example by hosting the web UI), you must offer them the source of your modified

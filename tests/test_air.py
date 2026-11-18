@@ -195,7 +195,26 @@ def test_setup_only_skips_the_air_model(settings, monkeypatch, capsys):
     monkeypatch.setattr(air_mod, "prefetch", lambda *a, **k: called.append(1) or "x")
     settings.device = "cpu"
     cli.prefetch(settings)
-    assert called == [] and "air watch: skipped" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert called == [] and "air watch: skipped" in out and "CLIP" not in out
     settings.air = True
     cli.prefetch(settings)
-    assert called == [1]
+    out = capsys.readouterr().out
+    assert called == [1] and "WARNING: Air watch (FPV_AIR=1)" in out and "MobileCLIP (research-only licence)" in out
+
+
+def test_air_watch_never_uses_yoloe_or_mobileclip(tmp_path):
+    """Apple MobileCLIP (YOLOE's text encoder) is research-only: the kit uses YOLO-World v2 + OpenAI CLIP."""
+    from pathlib import Path
+
+    assert air.AIR_MODEL == "yolov8s-worldv2.pt"
+    for bad in ("yoloe-26s-seg.pt", "mobileclip2_b.ts"):
+        with pytest.raises(ValueError, match="research-only"):
+            air.prefetch(tmp_path, model=bad)  # refused before anything is imported or downloaded
+        with pytest.raises(ValueError, match="research-only"):
+            air.AirDetector(tmp_path, model=bad)
+    assert not air.available(tmp_path)
+    with pytest.raises(FileNotFoundError, match="FPV_AIR=1"):
+        air.AirDetector(tmp_path)
+    src = "".join(p.read_text() for p in Path(air.__file__).parent.rglob("*.py"))
+    assert "import YOLOE" not in src and "get_text_pe" not in src and "mobileclip:" not in src
