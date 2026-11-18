@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FPV vision</title>
+<link rel="stylesheet" href="/isr-ui.css?v=3">
+<script src="/isr-ui.js?v=3"></script>
+<style>
+  /* layout specific to fpv-vision; colours, type and controls come from isr-ui.css */
+  .fv-top { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: var(--gap); align-items: start; }
+  @media (max-width: 900px) { .fv-top { grid-template-columns: minmax(0, 1fr); } }
+  .fv-side { display: grid; gap: var(--gap); }
+  .fv-video { position: relative; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+  #video { display: block; width: 100%; aspect-ratio: 16 / 9; max-height: calc(100vh - 150px); object-fit: contain; }
+  #srcTag { position: absolute; bottom: 12px; right: 12px; font-size: 16px; padding: 4px 10px; background: var(--bg); }
+  #cropBox { position: absolute; border: 1px dashed var(--warn); display: none; pointer-events: none; }
+  .fv-video.cropping { cursor: crosshair; }
+  .fv-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+  .fv-full { width: 100%; }
+  [hidden] { display: none !important; }
+  .fv-side select { width: 100%; margin-bottom: 10px; }
+  .fv-search { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 2px 10px; margin: 10px 0 4px; }
+  .fv-search input { min-height: 0; margin: 0; }
+  .fv-search .hint { display: block; font-size: 14px; line-height: 1.2; }
+  .fv-state { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .fv-side .isr-card { padding: 12px 14px; }
+  .fv-form label { margin: 6px 0 3px; }
+  #counts li { padding: 4px 0; }
+  #counts .isr-big { font-size: 24px; }
+  .fv-side .fv-msg { min-height: 0; margin-top: 4px; }
+  .fv-side .fv-msg:empty { display: none; }
+  #summary { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: 14px; }
+  .fv-inline { display: flex; gap: 8px; }
+  .fv-inline input { flex: 1; min-width: 0; }
+  .fv-side details.isr-more { margin-top: 6px; }
+  #replayBar { display: none; }
+  #replayBar input[type=range] { flex: 1 1 200px; min-height: 0; padding: 0; accent-color: var(--muted); }
+  #counts li { align-items: center; }
+  #counts .name { flex: 1; }
+  #counts .name::first-letter { text-transform: uppercase; }
+  .fv-msg { min-height: 1.5em; margin-top: 8px; }
+  .fv-msg.bad { color: var(--bad); }
+  .fv-below { margin-top: 24px; }
+  .fv-gallery { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  .fv-snap { background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; cursor: pointer; font-size: 13px; }
+  .fv-snap.sel { border-color: var(--accent); }
+  .fv-snap img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+  .fv-snap div { padding: 6px 10px; }
+  .fv-form label { display: block; }
+  .fv-form input[type=text] { width: 100%; }
+  .fv-form input[type=checkbox] { min-height: 0; }
+  .fv-kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 8px 0 16px; }
+  .fv-kv span:nth-child(odd) { color: var(--muted); }
+  .fv-kv span:nth-child(even) { color: var(--text); overflow-wrap: anywhere; font-family: var(--mono); }
+  .fv-details .isr-section { margin: 20px 0 6px; }
+  #timeline { display: block; width: 100%; height: 90px; background: var(--panel-2); border: 1px solid var(--line); cursor: pointer; margin-top: 8px; }
+  progress { width: 100%; }
+</style>
+</head>
+<body>
+<header class="isr-bar">
+  <h1>FPV vision</h1><span class="isr-sub">Live drone feed</span>
+  <div class="isr-right">
+    <button class="isr-pill" id="isr-status">Starting</button>
+    <a class="isr-kit-link" id="isr-kit-link" href="#">Kit</a>
+  </div>
+  <div class="isr-status-list" id="isr-status-list"></div>
+</header>
+<main>
+  <div class="isr-banner bad" id="banner" hidden></div>
+
+  <div class="fv-top">
+    <section>
+      <div class="fv-video" id="vwrap">
+        <img id="video" src="/stream.mjpg" alt="Live video with detection boxes" draggable="false">
+        <span class="isr-tag" id="srcTag"></span>
+        <div id="cropBox"></div>
+      </div>
+      <div class="fv-row" id="replayBar">
+        <button class="isr-btn" id="rpPrev" title="Previous clip">⏮</button>
+        <button class="isr-btn" id="rpNext" title="Next clip">⏭</button>
+        <input type="range" id="scrub" min="0" max="100" step="0.1" value="0" aria-label="Position in clip">
+        <span class="isr-mono" id="rpTime"></span>
+      </div>
+      <div class="fv-row">
+        <button class="isr-btn" id="btnSnap">Take snapshot</button>
+        <button class="isr-btn" id="btnDescribe">Describe scene</button>
+        <button class="isr-btn" id="btnRec">Record</button>
+        <span class="isr-muted" id="recInfo"></span>
+      </div>
+      <div class="fv-msg" id="actionMsg"></div>
+    </section>
+
+    <aside class="fv-side">
+      <div class="isr-card">
+        <h2>Source</h2>
+        <select id="srcSelect" aria-label="Video source"></select>
+        <label class="fv-search"><input type="checkbox" id="searchToggle"> <span><b>Search</b><span class="isr-muted hint">small, distant people and vehicles</span></span> <span class="isr-mono isr-muted" id="searchState"></span></label>
+        <div class="fv-state"><span id="srcState" class="isr-mono"></span>
+          <button class="isr-btn" id="btnStop">Stop</button></div>
+        <button class="isr-btn primary fv-full" id="btnGo">Start</button>
+        <div class="fv-msg isr-muted" id="srcMsg"></div>
+      </div>
+      <div class="isr-card">
+        <h2>In view</h2>
+        <ul class="isr-list" id="counts"></ul>
+      </div>
+      <div class="isr-card">
+        <h2>Scene</h2>
+        <div id="summary">No description yet.</div>
+        <div class="isr-muted" id="summaryMeta"></div>
+      </div>
+      <div class="isr-card fv-form">
+        <h2>Spot report</h2>
+        <label for="pos" class="isr-muted">Grid (MGRS)</label>
+        <input type="text" id="pos" class="isr-grid-ref" placeholder="e.g. 15T WG 00000 49776" autocomplete="off">
+        <label for="activity" class="isr-muted">Activity</label>
+        <div class="fv-inline"><input type="text" id="activity" placeholder="e.g. 2 pax loading vehicle">
+          <button class="isr-btn" id="btnSpot">Send</button></div>
+        <div class="fv-msg isr-mono" id="spotMsg"></div>
+        <details class="isr-more">
+          <summary>Details</summary>
+          <label for="posLatLon">Or lat, lon (used instead of the grid if filled in)</label>
+          <input type="text" id="posLatLon" class="isr-mono" placeholder="e.g. 42.0, -93.0" autocomplete="off">
+          <label for="unit">Unit</label>
+          <input type="text" id="unit" value="unk">
+          <div class="fv-row">
+            <label><input type="checkbox" id="sendCot" checked> Send to TAK</label>
+            <label><input type="checkbox" id="sendMesh" checked> Send on mesh</label>
+          </div>
+          <p id="selSnap">Uses a fresh snapshot. Tap a snapshot below to use that one.</p>
+        </details>
+      </div>
+      <div class="isr-card">
+        <h2>Demo</h2>
+        <p class="isr-muted">Pick a clip or the camera above and press Start. Clear removes this tool's spot reports from the map.</p>
+        <button class="isr-btn fv-full" id="btnDemoClear">Clear demo</button>
+        <div class="fv-msg isr-muted" id="demoMsg"></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="isr-card fv-below">
+    <h2>Snapshots</h2>
+    <div class="fv-gallery" id="gallery"></div>
+  </div>
+
+  <details class="isr-more fv-details">
+    <summary>Details</summary>
+
+    <h2 class="isr-section">Performance</h2>
+    <div class="fv-kv" id="perf"></div>
+
+    <h2 class="isr-section">Detector</h2>
+    <div class="fv-kv" id="detInfo"></div>
+
+    <h2 class="isr-section">Source</h2>
+    <div class="fv-kv" id="srcInfo"></div>
+    <div class="fv-row">
+      <input type="text" id="srcCustom" placeholder="replay:/path, camera:iPhone, screen:1, rtsp://…" style="flex:1 1 260px">
+      <button class="isr-btn" id="btnSrcCustom">Use source</button>
+    </div>
+    <div class="fv-row">
+      <button class="isr-btn" id="btnCrop">Crop</button>
+      <button class="isr-btn" id="btnCropClear">Clear crop</button>
+      <button class="isr-btn" id="btnReset">Reset counts</button>
+    </div>
+    <div class="fv-row"><label><input type="checkbox" id="hudToggle"> Show debug text on the video (model, fps, time)</label></div>
+
+    <h2 class="isr-section">Scene description</h2>
+    <div class="fv-kv" id="sceneInfo"></div>
+    <label>Describe automatically
+      <select id="periodic">
+        <option value="0">Off</option><option value="10">Every 10 s</option><option value="15">Every 15 s</option>
+        <option value="30">Every 30 s</option><option value="60">Every 60 s</option><option value="120">Every 2 min</option>
+      </select>
+    </label>
+
+    <h2 class="isr-section">TAK and mesh</h2>
+    <div class="fv-kv" id="netInfo"></div>
+    <ul class="isr-list" id="meshRx"></ul>
+
+    <h2 class="isr-section">Post-flight analysis</h2>
+    <div class="fv-row">
+      <select id="anTarget" style="flex:1 1 260px"></select>
+      <select id="anFps" aria-label="Frames analysed per second">
+        <option value="2">2 fps</option><option value="5" selected>5 fps</option><option value="10">10 fps</option>
+      </select>
+      <button class="isr-btn" id="btnAnalyse">Analyse</button>
+      <button class="isr-btn" id="btnAnCancel" hidden>Cancel</button>
+    </div>
+    <input type="text" id="anPath" class="fv-full" style="margin-top:10px" placeholder="Or a file or folder path, such as /Volumes/SD/DCIM">
+    <div id="anBox" hidden>
+      <progress id="anProg" max="1" value="0"></progress>
+      <div id="anInfo"></div>
+      <canvas id="timeline" width="1200" height="90"></canvas>
+      <div>People (light) and vehicles (grey) per second. Click to replay from there.</div>
+      <div class="fv-gallery" id="anBest" style="margin-top:10px"></div>
+    </div>
+
+    <h2 class="isr-section">Clips</h2>
+    <ul class="isr-list" id="clips"></ul>
+
+    <h2 class="isr-section">About</h2>
+    <p>Boxes are image positions only, not map positions. Footage folders: <span id="footDirs"></span>.
+      <a href="https://github.com/Jacob-Haynes/fpv-vision" target="_blank" rel="noopener">Source code (AGPL-3.0)</a>.</p>
+  </details>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let selectedSnap = null, lastStatus = null, galleryKey = "", clipsKey = "", scrubbing = false, picked = false;
+let posTouched = false, cropMode = false, cropStart = null, jobId = null, jobTimer = null, lastJob = null, footage = [];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ago = (ts) => { const s = Math.round(Date.now() / 1000 - ts); return s < 60 ? `${s} s ago` : `${Math.round(s / 60)} min ago`; };
+const mmss = (t) => `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const pad = (n) => String(n).padStart(2, "0");
+const SCENE = { openai_compat: "Local AI", gemini: "Gemini (cloud)", local: "Detector summary", off: "Detector summary" };
+const TAG = { simulated: ["sim", "SIM"], recorded: ["rec", "REC"], live: ["live", "LIVE"] };
+const provOf = (kind) => kind === "simulate" || kind === "synthetic" ? "simulated" : kind === "replay" ? "recorded" : "live";
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof data.detail === "string" ? data.detail : "the server refused the request");
+  return data;
+}
+function say(el, text, ok = true) { el.textContent = text; el.classList.toggle("bad", !ok); }
+function kv(el, rows) { el.innerHTML = rows.filter(r => r[1] !== undefined && r[1] !== "").map(([k, v]) => `<span>${esc(k)}</span><span>${esc(v)}</span>`).join(""); }
+const shortModel = (m) => String(m || "").split("/").pop().replace(/\.pt$|_ncnn_model$|\.onnx$/, "");
+
+// ---------------------------------------------------------------- status
+function checks(s) {
+  const src = s.source, d = s.detector, v = s.vlm, t = s.tak, m = s.mesh, out = [];
+  const fps = src.live && Math.abs(src.fps_in - src.fps_unique) > 1 ? `${Math.round(src.fps_unique)} of ${Math.round(src.fps_in)} fps` : `${Math.round(src.fps_unique)} fps`;
+  const camGone = src.live && !src.connected && /not connected/.test(src.error || "");
+  out.push({ name: "Video", state: src.connected ? "ok" : "bad", text: src.connected ? `${src.height}p ${fps}` : camGone ? "camera not connected" : "no signal" });
+  if (camGone) out.push({ name: "Camera", state: "bad", text: "not connected" });
+  out.push({ name: "Detector", state: d.name === "none" ? "bad" : "ok", text: d.name === "none" ? "off" : `${shortModel(d.model)} on ${d.device}` });
+  const se = s.search || {};
+  if (se.on) out.push({ name: "Search", state: "ok", text: `${se.fps || 0} per second` });
+  if (src.kind === "camera" && ["denied", "restricted"].includes(s.camera_permission))
+    out.push({ name: "Camera", state: "bad", text: "access denied" });
+  out.push({ name: "AI", optional: true, state: v.active === "openai_compat" || v.active === "gemini" ? "ok" : v.selected !== "off" ? "warn" : "idle",
+             text: v.active === "openai_compat" ? (v.model || "local") : v.active === "gemini" ? "Gemini (cloud)" : v.selected !== "off" ? "not reachable" : "off" });
+  out.push({ name: "TAK", optional: true, state: !t.enabled ? "idle" : t.registered ? "ok" : t.connected ? "warn" : "bad",
+             text: !t.enabled ? "off" : t.registered ? "connected" : t.connected ? "registering" : "not connected" });
+  out.push({ name: "MQTT", optional: true, state: !m.enabled ? "idle" : m.connected ? "ok" : "bad", text: !m.enabled ? "off" : m.connected ? "connected" : "not connected" });
+  return out;
+}
+
+function renderStatus(s) {
+  lastStatus = s;
+  const src = s.source, d = s.detector, v = s.vlm, st = s.stats;
+  ISR.setStatus(checks(s));
+
+  const camDenied = src.kind === "camera" && ["denied", "restricted"].includes(s.camera_permission);
+  const noSample = src.kind === "simulate" && src.resolved === "synthetic";
+  $("banner").hidden = !camDenied && !noSample && src.connected !== false;
+  $("banner").classList.toggle("bad", camDenied || !src.connected);
+  $("banner").textContent = camDenied ? "Camera access is blocked. Allow it for Terminal in System Settings, Privacy & Security, Camera, then restart."
+    : !src.connected && /not connected/.test(src.error || "") ? `${src.error}. Plug it in: fpv-vision keeps looking for it and never switches to another camera.`
+    : !src.connected ? "No video. Check the capture card is plugged in, then press Start."
+    : "The sample clip is not on this Mac, so this is a test pattern. While online, run scripts/run-laptop.sh --setup-only.";
+
+  const [cls, word] = TAG[/\/samples\//.test(src.spec) ? "simulated" : provOf(src.kind)];  // bundled samples count as simulated
+  $("srcTag").className = "isr-tag " + cls; $("srcTag").textContent = word;
+
+  // source picker + the one primary button
+  if (!picked && document.activeElement !== $("srcSelect")) setSelect(src.spec);
+  updateGo();
+
+  const rp = src.replay_state;
+  $("replayBar").style.display = rp ? "flex" : "none";
+  if (rp) {
+    $("rpTime").textContent = `${mmss(rp.pos)} / ${mmss(rp.duration)}`;
+    if (!scrubbing) { $("scrub").max = rp.duration || 1; $("scrub").value = rp.pos; }
+  }
+
+  const AIR = new Set(["drone", "helicopter", "aeroplane", "bird", "air contact"]);  // OP sentry's job, not FPV's
+  const labels = [...new Set([...Object.keys(s.counts), ...Object.keys(s.totals)])].filter(l => !AIR.has(l))
+    .sort((a, b) => (s.counts[b] || 0) - (s.counts[a] || 0) || a.localeCompare(b));
+  $("counts").innerHTML = labels.slice(0, 4).map(l => `<li><span class="name">${esc(l)}</span>
+      <span class="isr-big">${pad(s.counts[l] || 0)}</span><span class="isr-muted isr-mono">${s.totals[l] || 0} seen</span></li>`).join("")
+    || `<li class="isr-muted">Nothing in view</li>`;
+
+  if (s.last_summary) {
+    $("summary").textContent = s.last_summary.text;
+    $("summaryMeta").textContent = `${SCENE[s.last_summary.mode] || s.last_summary.mode}, ${ago(s.last_summary.ts)}`;
+  } else if (s.live_summary) {
+    $("summary").textContent = s.live_summary;
+    $("summaryMeta").textContent = "Detector summary, live";
+  }
+  $("btnDescribe").disabled = v.retry_in > 0 && v.active !== "off";
+  $("btnDescribe").textContent = $("btnDescribe").disabled ? `Describe scene (${Math.ceil(v.retry_in)} s)` : "Describe scene";
+
+  const rec = s.recording;
+  $("btnRec").textContent = rec.active ? "Stop recording" : "Record";
+  $("btnRec").classList.toggle("danger", rec.active);
+  $("recInfo").textContent = rec.active ? `${rec.seconds} s` : "";
+  if (!$("pos").value && !posTouched && s.default_grid) $("pos").value = s.default_grid;
+  if (document.activeElement !== $("hudToggle")) $("hudToggle").checked = !!s.hud;
+  renderSearch(s.search || {});
+
+  // Details
+  kv($("perf"), [["Video", `${st.render_fps || 0} fps`], ["Detections", `${st.detect_fps || 0} per second`],
+    ["Inference", `${st.detect_ms || 0} ms`], ["Latency", `${Math.round(st.latency_ms || 0)} ms (frame in to boxes drawn, excludes capture and browser)`],
+    ["Frames per detection", st.frames_per_detection || ""], ["Detector back-off", st.detect_gap_ms ? `${st.detect_gap_ms} ms` : ""]]);
+  kv($("detInfo"), [["Model", d.name === "none" ? `none (${d.reason || "not loaded"})` : shortModel(d.model)], ["Runtime", d.backend ? `${d.backend} on ${d.device}` : ""],
+    ["Image size", d.imgsz], ["Confidence threshold", d.conf], ["Tracker", d.tracker],
+    ["Search", (s.search && s.search.on ? `on: ${(s.search.model || {}).tiles || "tiles"}, confidence ${s.search.conf}, shown after ${s.search.hits} passes in a row, ${s.search.ms} ms a pass. ` : "off. ") + "For open ground: finds small, distant people and vehicles."]]);
+  kv($("srcInfo"), [["Current", src.spec], ["Opened as", src.resolved], ["Size", src.width ? `${src.width}×${src.height}` : ""],
+    ["Device mode", src.negotiated], ["Receiving", src.live ? `${src.fps_in} fps, ${src.fps_unique} unique (${src.duplicates_dropped} padded duplicates dropped)` : ""],
+    ["Clip", rp ? `${rp.file} (${rp.index + 1} of ${rp.files.length}), ${rp.fps} fps, ${rp.dropped} frames skipped to stay real-time` : ""],
+    ["Crop", src.crop ? src.crop.map(x => x.toFixed(2)).join(", ") : ""], ["Camera access", s.camera_permission], ["Last error", src.error]]);
+  kv($("sceneInfo"), [["Order tried", (v.chain || []).join(", ")], ["In use", SCENE[v.active] || v.active], ["Model", v.model || ""]]);
+  $("periodic").disabled = !v.enabled;
+  if (document.activeElement !== $("periodic")) {
+    const p = String(Math.round(v.periodic_seconds));
+    $("periodic").value = [...$("periodic").options].some(o => o.value === p) ? p : "0";
+  }
+  const t = s.tak, m = s.mesh;
+  kv($("netInfo"), [["TAK", t.enabled ? `${t.host}:${t.port}` : "off"], ["TAK identity", t.enabled ? `${t.callsign} (${t.uid})` : ""],
+    ["TAK sent", t.enabled ? `${t.sent} reports, ${t.queued} queued` : ""], ["TAK error", t.error],
+    ["MQTT", m.enabled ? `${m.host}:${m.port} as ${m.user}` : "off"], ["Heartbeats", m.enabled ? m.heartbeats : ""], ["MQTT error", m.error]]);
+  const rx = m.rx || [];
+  $("meshRx").innerHTML = rx.map(x => `<li><b>${esc(x.from_short || x.from || "?")}</b> ${esc(x.text)} <span class="isr-muted">${ago(x.ts)}</span></li>`).join("");
+  if (!jobId && s.jobs && s.jobs.length) { const j = s.jobs[s.jobs.length - 1]; if (j.state === "running") watchJob(j.id); }
+}
+
+// ---------------------------------------------------------------- Search
+function renderSearch(se) {
+  if (document.activeElement !== $("searchToggle")) $("searchToggle").checked = !!se.on;
+  $("searchState").textContent = se.on ? `${se.fps || 0} per second` : "";
+}
+$("searchToggle").onchange = async () => {
+  const on = $("searchToggle").checked;
+  if (on) say($("srcMsg"), "Loading Search…");
+  try { await api("/api/search", { on }); say($("srcMsg"), ""); poll(); }
+  catch (e) { $("searchToggle").checked = false; say($("srcMsg"), `Search is unavailable: ${e.message}`, false); }
+};
+
+
+// ---------------------------------------------------------------- source picker
+function liveLabel(l) {
+  if (/^Screen capture/.test(l)) return "Screen mirror (phone)";
+  l = l.replace(/^Camera:\s*/, "");
+  return /usb3? video|capture|hdmi|cam link/i.test(l) ? `Capture card (${l})` : l;
+}
+async function loadSources() {
+  const [r, f] = await Promise.all([api("/api/sources"), api("/api/footage")]);
+  footage = f.files;
+  $("footDirs").textContent = f.dirs.length ? f.dirs.join(", ") : "none found (set FPV_FOOTAGE_DIRS)";
+  const live = r.sources.filter(s => s.group === "camera" || s.group === "screen");
+  const sim = r.sources.filter(s => s.group === "simulate");
+  const clipSpecs = new Set(["replay:" + f.files.map(x => x.path).join("|"), ...f.files.map(x => "replay:" + x.path)]);
+  const other = r.sources.filter(s => s.group === "current" && !clipSpecs.has(s.spec));
+  const opt = (spec, label) => `<option value="${esc(spec)}">${esc(label)}</option>`;
+  let html = `<optgroup label="Live">${live.map(s => opt(s.spec, liveLabel(s.label))).join("")}</optgroup>`;
+  if (footage.length) {
+    html += `<optgroup label="Clips">`;
+    if (footage.length > 1) html += opt("replay:" + footage.map(x => x.path).join("|"), `All clips (${footage.length}), looped`);
+    html += footage.map(x => opt("replay:" + x.path, x.name)).join("") + `</optgroup>`;
+  }
+  html += `<optgroup label="Simulated">${sim.map(s => opt(s.spec, s.label.replace(/^Simulate:\s*/, ""))).join("")}</optgroup>`;
+  if (other.length) html += `<optgroup label="Current">${other.map(s => opt(s.spec, s.label.replace(/^replay:.*\//, "Clip: "))).join("")}</optgroup>`;
+  $("srcSelect").innerHTML = html;
+  $("anTarget").innerHTML = footage.map(x => opt(x.path, x.name)).join("") || `<option value="">No clips found</option>`;
+  setSelect(r.current);
+  updateGo();
+}
+function setSelect(spec) {
+  const sel = $("srcSelect");
+  if ([...sel.options].some(o => o.value === spec)) sel.value = spec;
+}
+function sourceState(s) {
+  const src = s.source;
+  if (!s.running || (src.replay_state && src.replay_state.paused)) return "Stopped";
+  if (!src.connected) return "No signal";
+  const kind = /\/samples\//.test(src.spec) || src.kind === "simulate" || src.kind === "synthetic" ? "Simulated" : src.kind === "replay" ? "Clip" : "Live";
+  return `${kind} · ${Math.round(src.live ? src.fps_unique : src.fps_in)} fps`;
+}
+function updateGo() {
+  const s = lastStatus;
+  if (!s) return;
+  const same = $("srcSelect").value === s.source.spec, state = sourceState(s), stopped = state === "Stopped";
+  $("srcState").textContent = state;
+  // Start is the one primary action only when there is something to start: stopped, or another source picked
+  $("btnGo").hidden = same && !stopped;
+  $("btnGo").textContent = same ? "Start" : "Start this source";
+  $("btnStop").hidden = stopped;
+}
+async function switchSource(spec) {
+  say($("srcMsg"), "Starting…");
+  try { await api("/api/source", { spec }); picked = false; say($("srcMsg"), ""); setTimeout(loadSources, 600); }
+  catch (e) { say($("srcMsg"), `Could not start that source: ${e.message}.`, false); }
+}
+$("srcSelect").onchange = () => { picked = true; updateGo(); };
+$("btnGo").onclick = () => {
+  const s = lastStatus, spec = $("srcSelect").value;
+  if (s && spec === s.source.spec) return api("/api/run", { on: true }).then(poll);
+  switchSource(spec);
+};
+$("btnStop").onclick = () => api("/api/run", { on: false }).then(poll);
+$("btnDemoClear").onclick = async () => {
+  try {
+    const r = await api("/api/demo/clear", {});
+    say($("demoMsg"), r.cleared ? `Removed ${r.cleared} spot report${r.cleared === 1 ? "" : "s"} from the map.` : "Nothing on the map to remove.");
+  } catch (e) { say($("demoMsg"), `Could not clear: ${e.message}.`, false); }
+};
+$("hudToggle").onchange = () => api("/api/hud", { on: $("hudToggle").checked }).catch(() => {});
+$("btnSrcCustom").onclick = () => $("srcCustom").value.trim() && switchSource($("srcCustom").value.trim());
+
+// ---------------------------------------------------------------- replay controls
+$("rpNext").onclick = () => api("/api/replay", { action: "next" });
+$("rpPrev").onclick = () => api("/api/replay", { action: "prev" });
+$("scrub").addEventListener("input", () => { scrubbing = true; $("rpTime").textContent = `${mmss(Number($("scrub").value))} / ${mmss(Number($("scrub").max))}`; });
+$("scrub").addEventListener("change", async () => { await api("/api/replay", { action: "seek", value: Number($("scrub").value) }).catch(() => {}); scrubbing = false; });
+
+// ---------------------------------------------------------------- crop (drag on the video; normalised to the source frame)
+function imgRect() {
+  const img = $("video"), r = img.getBoundingClientRect();
+  const iw = img.naturalWidth || 16, ih = img.naturalHeight || 9;
+  const scale = Math.min(r.width / iw, r.height / ih), w = iw * scale, h = ih * scale;
+  return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, w, h };
+}
+function endCropMode() { cropMode = false; $("vwrap").classList.remove("cropping"); $("btnCrop").textContent = "Crop"; }
+$("btnCrop").onclick = () => {
+  if (cropMode) return endCropMode();
+  cropMode = true; $("vwrap").classList.add("cropping"); $("btnCrop").textContent = "Drag on the video";
+  $("vwrap").scrollIntoView({ behavior: "smooth", block: "center" });
+};
+$("btnCropClear").onclick = () => api("/api/crop", { crop: null });
+$("vwrap").addEventListener("pointerdown", (e) => { if (!cropMode) return; cropStart = [e.clientX, e.clientY]; $("cropBox").style.display = "block"; e.preventDefault(); });
+window.addEventListener("pointermove", (e) => {
+  if (!cropStart) return;
+  const wr = $("vwrap").getBoundingClientRect(), b = $("cropBox");
+  b.style.left = (Math.min(cropStart[0], e.clientX) - wr.left) + "px"; b.style.top = (Math.min(cropStart[1], e.clientY) - wr.top) + "px";
+  b.style.width = Math.abs(e.clientX - cropStart[0]) + "px"; b.style.height = Math.abs(e.clientY - cropStart[1]) + "px";
+});
+window.addEventListener("pointerup", async (e) => {
+  if (!cropStart) return;
+  const r = imgRect();
+  const x0 = (Math.min(cropStart[0], e.clientX) - r.left) / r.w, y0 = (Math.min(cropStart[1], e.clientY) - r.top) / r.h;
+  const w = Math.abs(e.clientX - cropStart[0]) / r.w, h = Math.abs(e.clientY - cropStart[1]) / r.h;
+  cropStart = null; $("cropBox").style.display = "none"; endCropMode();
+  const cur = lastStatus?.source?.crop;  // the stream shows the already-cropped frame: compose
+  let c = [Math.max(0, x0), Math.max(0, y0), Math.min(1, w), Math.min(1, h)];
+  if (cur) c = [cur[0] + c[0] * cur[2], cur[1] + c[1] * cur[3], c[2] * cur[2], c[3] * cur[3]];
+  try { await api("/api/crop", { crop: c }); } catch (err) { say($("actionMsg"), "Could not crop. Drag a larger box.", false); }
+});
+
+// ---------------------------------------------------------------- snapshots
+function snapCard(s, caption) {
+  const [cls, word] = TAG[s.provenance] || TAG.live;
+  return `<div class="fv-snap ${s.name === selectedSnap ? "sel" : ""}" data-name="${esc(s.name)}">
+      <img loading="lazy" src="/media/snapshots/${encodeURIComponent(s.image)}" alt="">
+      <div><span class="isr-tag ${cls}">${word}</span> <b>${caption}</b>${(s.reports || []).length ? ' <span class="isr-muted">reported</span>' : ""}
+      <br>${esc(s.summary || s.local_summary)}
+      <br><a href="#" data-describe="${esc(s.name)}">Describe</a></div></div>`;
+}
+function bindSnapCards(root) {
+  root.querySelectorAll(".fv-snap").forEach(el => el.onclick = (ev) => {
+    if (ev.target.dataset.describe) { ev.preventDefault(); describeSnap(ev.target.dataset.describe); return; }
+    selectedSnap = selectedSnap === el.dataset.name ? null : el.dataset.name; galleryKey = ""; refreshGallery();
+    if (lastJob) renderJob(lastJob);
+    $("selSnap").textContent = selectedSnap ? "Uses the selected snapshot. Tap it again to clear." : "Uses a fresh snapshot. Tap a snapshot below to use that one.";
+  });
+}
+async function describeSnap(name) {
+  say($("actionMsg"), "Describing…");
+  try { const r = await api(`/api/snapshots/${encodeURIComponent(name)}/describe`, {}); say($("actionMsg"), r.warning || "Described.", !r.warning); galleryKey = ""; refreshGallery(); }
+  catch (e) { say($("actionMsg"), "Could not describe that snapshot.", false); }
+}
+async function refreshGallery() {
+  const snaps = await api("/api/snapshots").catch(() => null);
+  if (!snaps) return;
+  const key = snaps.map(s => s.name + (s.summary_mode || "") + (s.reports || []).length + (s.summary || "").length).join(",") + selectedSnap;
+  if (key === galleryKey) return;
+  galleryKey = key;
+  $("gallery").innerHTML = snaps.map(s => snapCard(s, `${new Date(s.ts * 1000).toISOString().slice(11, 19)}Z`)).join("")
+    || `<div class="isr-muted">Take a snapshot to keep a frame.</div>`;
+  bindSnapCards($("gallery"));
+}
+async function refreshClips() {
+  const clips = await api("/api/clips").catch(() => null);
+  if (!clips) return;
+  const key = clips.map(c => c.name + c.bytes).join(",");
+  if (key === clipsKey) return; clipsKey = key;
+  $("clips").innerHTML = clips.map(c => `<li><a href="/media/clips/${encodeURIComponent(c.name)}" download>${esc(c.name)}</a> <span class="isr-muted">${(c.bytes / 1e6).toFixed(1)} MB${c.recording ? ", recording" : ""}</span></li>`).join("")
+    || `<li class="isr-muted">No recordings yet</li>`;
+}
+
+// ---------------------------------------------------------------- post-flight analysis
+function drawTimeline(tl, total) {
+  const c = $("timeline"), g = c.getContext("2d");
+  c.width = c.clientWidth * devicePixelRatio; c.height = 90 * devicePixelRatio;
+  g.clearRect(0, 0, c.width, c.height);
+  if (!tl.length) return;
+  const T = Math.max(total || 0, tl[tl.length - 1].t + 1), max = Math.max(1, ...tl.map(b => b.person + b.vehicle));
+  const bw = Math.max(1, c.width / T);
+  for (const b of tl) {
+    const x = b.t / T * c.width, hp = b.person / max * (c.height - 4), hv = b.vehicle / max * (c.height - 4);
+    g.fillStyle = cssVar("--text"); g.fillRect(x, c.height - hp, bw, hp);
+    g.fillStyle = cssVar("--muted"); g.fillRect(x, c.height - hp - hv, bw, hv);
+  }
+  c.onclick = async (e) => {
+    const t = (e.offsetX / c.clientWidth) * T;
+    const b = tl.reduce((a, x) => Math.abs(x.t - t) < Math.abs(a.t - t) ? x : a, tl[0]);
+    const path = lastJob && (lastJob.paths || []).find(p => p.endsWith("/" + b.file) || p === b.file) || null;
+    if (path) { await switchSource("replay:" + path); setTimeout(() => api("/api/replay", { action: "seek", value: b.file_t }).catch(() => {}), 800); }
+  };
+}
+function renderJob(j) {
+  lastJob = j;
+  $("anBox").hidden = false;
+  $("anProg").value = j.progress;
+  const eta = j.speed > 0 && j.state === "running" ? `, about ${Math.round((j.total_s - j.processed_s) / j.speed)} s left` : "";
+  const found = Object.keys(j.totals).length ? `. Found ${Object.entries(j.totals).map(([k, v]) => `${v} ${k}`).join(", ")}` : "";
+  $("anInfo").textContent = `${j.state === "running" ? "Analysing" : j.state === "done" ? "Done" : j.state}: ${mmss(j.processed_s)} of ${mmss(j.total_s)} at ${j.speed}× real time${eta}${found}` +
+    (j.error ? ". Stopped early, the file may be damaged." : "");
+  if (j.timeline) drawTimeline(j.timeline, j.total_s);
+  $("anBest").innerHTML = (j.best || []).map(b => snapCard({ provenance: "recorded", ...b }, `${esc(b.file)} at ${b.t.toFixed(1)} s`)).join("")
+    || `<div class="isr-muted">${j.state === "running" ? "Best frames appear when the run finishes." : "No people or vehicles found."}</div>`;
+  bindSnapCards($("anBest"));
+  $("btnAnCancel").hidden = j.state !== "running";
+  $("btnAnalyse").disabled = j.state === "running";
+}
+function watchJob(id) {
+  jobId = id; clearInterval(jobTimer);
+  jobTimer = setInterval(async () => {
+    try { const j = await api(`/api/analysis/${id}`); renderJob(j); if (j.state !== "running" && j.state !== "queued") { clearInterval(jobTimer); jobId = null; refreshGallery(); } }
+    catch (e) { clearInterval(jobTimer); jobId = null; }
+  }, 1000);
+}
+$("btnAnalyse").onclick = async () => {
+  const target = $("anPath").value.trim() || $("anTarget").value;
+  if (!target) { say($("anInfo"), "Pick a clip or enter a path first.", false); $("anBox").hidden = false; return; }
+  try { const r = await api("/api/analysis", { target, sample_fps: Number($("anFps").value) }); renderJob(r.job); watchJob(r.job.id); }
+  catch (e) { $("anBox").hidden = false; say($("anInfo"), `Could not analyse: ${e.message}.`, false); }
+};
+$("btnAnCancel").onclick = () => jobId && api(`/api/analysis/${jobId}/cancel`, {});
+
+// ---------------------------------------------------------------- actions
+$("btnSnap").onclick = async () => {
+  try { await api("/api/snapshot", {}); say($("actionMsg"), "Snapshot saved."); refreshGallery(); }
+  catch (e) { say($("actionMsg"), "No frame yet. Start a source first.", false); }
+};
+$("btnDescribe").onclick = async () => {
+  $("btnDescribe").disabled = true; say($("actionMsg"), "Describing…");
+  try { const r = await api("/api/describe", { mode: "auto" }); say($("actionMsg"), r.warning || "Described.", !r.warning); refreshGallery(); poll(); }
+  catch (e) { say($("actionMsg"), "Could not describe the scene. Try again in a few seconds.", false); }
+  finally { $("btnDescribe").disabled = false; }
+};
+$("btnRec").onclick = async () => {
+  const on = lastStatus?.recording.active;
+  try { const r = await api(on ? "/api/record/stop" : "/api/record/start", {}); say($("actionMsg"), on ? `Saved ${r.file || "recording"}.` : "Recording."); poll(); refreshClips(); }
+  catch (e) { say($("actionMsg"), "Could not record. Check there is free disk space.", false); }
+};
+$("btnReset").onclick = () => api("/api/counts/reset", {}).then(poll);
+$("periodic").onchange = () => api("/api/periodic", { seconds: Number($("periodic").value) }).catch(() => say($("actionMsg"), "Automatic descriptions need a scene model.", false));
+$("btnSpot").onclick = async () => {
+  $("btnSpot").disabled = true;
+  try {
+    const r = await api("/api/spot-report", { position: $("posLatLon").value.trim() || $("pos").value, activity: $("activity").value, unit: $("unit").value,
+      snapshot: selectedSnap, send_cot: $("sendCot").checked, send_mesh: $("sendMesh").checked });
+    const parts = [`Grid ${r.report.grid}.`];  // shown in .isr-mono
+    if (r.cot) parts.push(r.cot.queued ? (r.cot.registered ? "Sent to TAK." : "TAK queued, sends when connected.") : "Not sent to TAK (TAK is off or busy).");
+    if (r.mesh) parts.push(r.mesh.sent ? "Sent on mesh." : "Not sent on mesh (mesh offline or sent too recently).");
+    say($("spotMsg"), parts.join(" "), true); refreshGallery();
+  } catch (e) { say($("spotMsg"), `Report not sent: ${e.message}.`, false); }
+  finally { $("btnSpot").disabled = false; }
+};
+$("pos").addEventListener("input", () => { posTouched = true; });
+$("video").onerror = () => setTimeout(() => { $("video").src = "/stream.mjpg?t=" + Date.now(); }, 1500);
+
+async function poll() {
+  try { renderStatus(await api("/api/status")); }
+  catch (e) { ISR.setStatus([{ name: "Server", state: "bad", text: "not responding" }]); }
+}
+poll(); loadSources().catch(() => {}); refreshGallery(); refreshClips();
+setInterval(poll, 1000); setInterval(refreshGallery, 4000); setInterval(refreshClips, 5000);
+</script>
+</body>
+</html>
